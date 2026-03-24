@@ -161,6 +161,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details on how to get started.
 
 ---
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/I2I61WKPWM)
+
 ## License
 
 This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
