@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Distribution / packaging
+MANIFEST
+*.spec
+
+# Logs
+*.log
+
+# User config (runtime data, not source)
+# ~/.config/ubuntu-gitgui/ is outside the repo — nothing to ignore here
+
+# Temporary files
+*.tmp
+*.bak
+
+layout/

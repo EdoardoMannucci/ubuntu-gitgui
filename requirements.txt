@@ -1,0 +1,33 @@
+# Dependencies for ubuntu-gitgui
+#
+# Supply-chain hardening (MED-4):
+#   Versions are pinned exactly to prevent accidental upgrades.
+#   For production / CI builds, regenerate this file with hash verification:
+#
+#     pip install pip-tools
+#     pip-compile --generate-hashes requirements.in -o requirements.txt
+#     pip install --require-hashes -r requirements.txt
+#
+#   This ensures each downloaded wheel is verified against a known SHA-256
+#   digest, preventing attacks from a compromised PyPI mirror or MITM.
+#
+# Audit regularly:
+#   pip install pip-audit && pip-audit -r requirements.txt
+
+# ── Build tools (packaging only — not needed at runtime) ─────────────────────
+#   Install before running build.sh:  pip install pyinstaller
+#   pyinstaller-hooks-contrib is a dependency of pyinstaller >=6 and is
+#   installed automatically.
+pyinstaller>=6.0
+
+# ── Runtime dependencies ──────────────────────────────────────────────────────
+gitdb==4.0.12
+GitPython==3.1.46
+packaging==26.0
+Pygments==2.19.2
+PyQt6==6.10.2
+PyQt6-Qt6==6.10.2
+PyQt6_sip==13.11.1
+QtAwesome==1.4.1
+QtPy==2.4.3
+smmap==5.0.3
