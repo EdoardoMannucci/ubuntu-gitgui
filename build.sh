@@ -67,6 +67,7 @@ $PYTHON -m PyInstaller \
     --windowed \
     \
     `# ── Data files ──────────────────────────────────────────────────` \
+    --add-data "ubuntu-gitgui.png:." \
     --add-data "src/locales:src/locales" \
     --add-data "src/styles:src/styles" \
     --add-data "$QTAWESOME_PATH:qtawesome" \
@@ -90,10 +91,14 @@ $PYTHON -m PyInstaller \
     \
     main.py
 
-# ── Copy the .desktop file into the bundle for convenience ──────────────────
+# ── Copy the .desktop file and icon into the bundle for convenience ─────────
 if [ -f "$SCRIPT_DIR/ubuntu-gitgui.desktop" ]; then
     cp "$SCRIPT_DIR/ubuntu-gitgui.desktop" "$SCRIPT_DIR/dist/ubuntu-gitgui/"
     echo "[build] Copied ubuntu-gitgui.desktop into dist/"
+fi
+if [ -f "$SCRIPT_DIR/ubuntu-gitgui.png" ]; then
+    cp "$SCRIPT_DIR/ubuntu-gitgui.png" "$SCRIPT_DIR/dist/ubuntu-gitgui/"
+    echo "[build] Copied ubuntu-gitgui.png into dist/"
 fi
 
 # ── Report ───────────────────────────────────────────────────────────────────
@@ -107,8 +112,9 @@ echo "  Run    : $DIST_EXE"
 echo ""
 echo "  To add to your system launcher:"
 echo "    1. Copy dist/ubuntu-gitgui/ to a permanent location, e.g. /opt/"
-echo "    2. Edit ubuntu-gitgui.desktop  →  set Exec= and Icon= to the"
-echo "       absolute paths inside that folder."
-echo "    3. cp ubuntu-gitgui.desktop ~/.local/share/applications/"
-echo "    4. update-desktop-database ~/.local/share/applications/"
+echo "    2. sudo cp dist/ubuntu-gitgui/ubuntu-gitgui.png /usr/share/pixmaps/"
+echo "    3. Edit ubuntu-gitgui.desktop  →  set Exec= to the absolute path"
+echo "       of the executable; Icon= can stay as 'ubuntu-gitgui' (no path)."
+echo "    4. cp ubuntu-gitgui.desktop ~/.local/share/applications/"
+echo "    5. update-desktop-database ~/.local/share/applications/"
 echo "══════════════════════════════════════════════════════════════════════"

@@ -5,18 +5,17 @@ Name=ubuntu-gitgui
 GenericName=Git GUI Client
 Comment=Open-source Git GUI client for Linux — a community-driven alternative to GitKraken
 # ──────────────────────────────────────────────────────────────────────────────
-# EDIT THESE TWO LINES before installing:
+# EDIT THIS LINE before installing:
 #
-#   Exec   → absolute path to the compiled executable inside dist/ubuntu-gitgui/
-#             Example: /opt/ubuntu-gitgui/ubuntu-gitgui
+#   Exec → absolute path to the compiled executable inside dist/ubuntu-gitgui/
+#           Example: /opt/ubuntu-gitgui/ubuntu-gitgui
 #
-#   Icon   → absolute path to a PNG/SVG icon (128×128 recommended), or a
-#             named icon from your system theme (e.g. "git-gui", "utilities-terminal")
-#             A 128px PNG export of the app icon should be placed at:
-#             /opt/ubuntu-gitgui/ubuntu-gitgui.png
+# Icon uses the bare name "ubuntu-gitgui" so the desktop environment looks up
+# the icon in the system icon theme search path.  Install the icon first:
+#   sudo cp ubuntu-gitgui.png /usr/share/pixmaps/ubuntu-gitgui.png
 # ──────────────────────────────────────────────────────────────────────────────
 Exec=/opt/ubuntu-gitgui/ubuntu-gitgui
-Icon=/opt/ubuntu-gitgui/ubuntu-gitgui.png
+Icon=ubuntu-gitgui
 Terminal=false
 StartupNotify=true
 StartupWMClass=ubuntu-gitgui

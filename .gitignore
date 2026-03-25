@@ -34,6 +34,8 @@ htmlcov/
 # Distribution / packaging
 MANIFEST
 *.spec
+deb_build/
+*.deb
 
 # Logs
 *.log

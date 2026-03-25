@@ -23,7 +23,7 @@ Phase 5: StagingController + StagingWidget replace the staging placeholder.
 
 import git
 from PyQt6.QtCore import Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices
+from PyQt6.QtGui import QAction, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -118,6 +118,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ubuntu-gitgui")
         self.resize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
+        # Set window icon — uses QApplication icon when already set; this
+        # also covers cases where MainWindow is shown before app.setWindowIcon
+        app_icon = QApplication.instance()
+        if app_icon is not None:
+            self.setWindowIcon(app_icon.windowIcon())
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         """Shut down the toolbar worker thread before the window closes."""

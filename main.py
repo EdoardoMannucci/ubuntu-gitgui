@@ -20,11 +20,22 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QTranslator
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from src.utils.app_settings import load_settings
 from src.utils.styles import get_stylesheet
 from src.views.main_window import MainWindow
+
+
+def resource_path(relative: str) -> str:
+    """Return the absolute path to a bundled resource.
+
+    When frozen by PyInstaller the files land in ``sys._MEIPASS``; when
+    running from source they live next to this script.
+    """
+    base = getattr(sys, "_MEIPASS", Path(__file__).parent)
+    return str(Path(base) / relative)
 
 
 def _install_translator(app: QApplication, language: str) -> None:
@@ -54,6 +65,7 @@ def main() -> None:
     )
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(resource_path("ubuntu-gitgui.png")))
 
     # Load user preferences and install the matching translator
     cfg = load_settings()

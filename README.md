@@ -48,6 +48,7 @@ GitKraken is a great tool, but it is proprietary and requires a paid plan for pr
 - [x] **Phase 12** — Recent-repos combo in toolbar, File → Recent Repositories menu
 - [x] **Phase 13** — Settings dialog (global Git config, language selection), i18n infrastructure
 - [x] **Phase 14** — PyInstaller packaging: `build.sh` + `.desktop` launcher file
+- [x] **Phase 15** — Custom native app icon (`ubuntu-gitgui.png`) bundled in binary and `.deb` package; `create_deb.sh` for one-command Debian/Ubuntu packaging
 
 ---
 
@@ -91,26 +92,46 @@ chmod +x build.sh
 ```
 
 The script produces a `dist/ubuntu-gitgui/` directory containing the executable and all its dependencies.
+The `ubuntu-gitgui.png` icon is automatically bundled inside the directory and embedded in the binary via `--add-data`.
 
 ```
 dist/ubuntu-gitgui/
 ├── ubuntu-gitgui          ← the standalone executable
-├── ubuntu-gitgui.desktop  ← desktop launcher (edit Exec= and Icon= paths)
+├── ubuntu-gitgui.desktop  ← desktop launcher (Exec= pre-set; Icon= uses bare name)
+├── ubuntu-gitgui.png      ← application icon (128×128 PNG, bundled automatically)
 ├── _internal/             ← bundled libraries and Qt plugins
 └── ...
 ```
 
-### Installing to your system launcher (GNOME / KDE)
+### Building a .deb package (Ubuntu / Debian)
+
+After running `./build.sh`, package the app into a `.deb` with a single command:
+
+```bash
+chmod +x create_deb.sh
+./create_deb.sh 1.0.0          # pass the version number as an argument
+
+# Install the generated package
+sudo dpkg -i ubuntu-gitgui_1.0.0_amd64.deb
+```
+
+The `.deb` installer places the bundle at `/opt/ubuntu-gitgui/`, registers the icon in
+`/usr/share/pixmaps/ubuntu-gitgui.png`, and creates a `.desktop` entry in
+`/usr/share/applications/` so the app appears in your application launcher automatically.
+
+### Installing to your system launcher (GNOME / KDE) — manual method
 
 ```bash
 # Copy the bundle to a permanent location
 sudo cp -r dist/ubuntu-gitgui /opt/ubuntu-gitgui
 
-# Edit the .desktop file: set Exec= and Icon= to the absolute paths
-nano /opt/ubuntu-gitgui/ubuntu-gitgui.desktop
+# Install the icon so the desktop environment can find it by name
+sudo cp dist/ubuntu-gitgui/ubuntu-gitgui.png /usr/share/pixmaps/
 
-# Install the launcher
+# Install the launcher (Icon= is already set to the bare name "ubuntu-gitgui")
 cp /opt/ubuntu-gitgui/ubuntu-gitgui.desktop ~/.local/share/applications/
+
+# Update the desktop database
 update-desktop-database ~/.local/share/applications/
 ```
 
