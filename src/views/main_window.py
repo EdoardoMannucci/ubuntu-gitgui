@@ -22,7 +22,7 @@ Phase 5: StagingController + StagingWidget replace the staging placeholder.
 """
 
 import git
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
@@ -52,9 +52,11 @@ from src.models.profile import Profile
 from src.models.recent_repos import RecentRepositoryManager
 from src.utils.icons import icon as get_icon
 from src.views.about_dialog import AboutDialog
+from src.views.commit_dialog import CommitDialog
 from src.views.clone_dialog import CloneDialog
 from src.views.commit_graph_widget import CommitGraphWidget
 from src.views.commit_inspector_widget import CommitInspectorWidget
+from src.views.create_tag_dialog import CreateTagDialog
 from src.views.diff_viewer import DiffViewerWidget
 from src.views.profile_dialog import ProfileDialog
 from src.views.settings_dialog import SettingsDialog
@@ -87,9 +89,11 @@ class MainWindow(QMainWindow):
         self._repo_ctrl.repo_opened.connect(self._on_repo_opened)
         self._repo_ctrl.repo_closed.connect(self._on_repo_closed)
         self._repo_ctrl.branch_changed.connect(self._on_branch_changed)
+        self._repo_ctrl.refs_updated.connect(self._on_refs_updated)
 
         self._staging_ctrl = StagingController(parent=self)
         self._staging_ctrl.status_changed.connect(self._check_conflict_state)
+        self._staging_ctrl.commit_made.connect(self._on_staging_commit_made)
 
         self._toolbar_ctrl = ToolbarController(parent=self)
         self._toolbar_ctrl.operation_started.connect(self._on_toolbar_started)
@@ -103,6 +107,10 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_central_widget()
         self._build_status_bar()
+
+        # Auto-open the most-recently-used repository on startup.
+        # Deferred via QTimer so the window is fully shown before loading.
+        QTimer.singleShot(0, self._auto_load_startup_repo)
 
     # ── Window chrome ─────────────────────────────────────────────────
 
@@ -366,6 +374,9 @@ class MainWindow(QMainWindow):
             profile_ctrl=self._profile_ctrl,
         )
         self._staging_widget.file_selected.connect(self._on_file_selected_for_diff)
+        self._staging_widget.open_commit_dialog_requested.connect(
+            self._open_commit_dialog
+        )
         right_splitter.addWidget(self._staging_widget)
 
         self._diff_viewer = DiffViewerWidget(staging_ctrl=self._staging_ctrl)
@@ -443,19 +454,54 @@ class MainWindow(QMainWindow):
 
     def _action_clone_repo(self) -> None:
         """File → Clone Repository…"""
-        dialog = CloneDialog(parent=self)
+        from src.utils.credentials import AuthMethod, get_token
+
+        # Resolve auth credentials from the active profile for display + use
+        active_profile = self._profile_ctrl.active_profile
+        ssh_key        = ""
+        https_username = ""
+        https_token    = ""
+
+        if active_profile:
+            if active_profile.auth_method == AuthMethod.HTTPS:
+                https_username = active_profile.https_username
+                https_token    = get_token(https_username)
+            else:
+                ssh_key = active_profile.ssh_key_path or ""
+
+        dialog = CloneDialog(ssh_key_path=ssh_key, parent=self)
         if dialog.exec() != CloneDialog.DialogCode.Accepted:
             return
+
+        url  = dialog.clone_url
+        dest = dialog.clone_destination
+
+        # Show busy feedback while the blocking clone runs
+        self._set_toolbar_enabled(False)
+        self.statusBar().showMessage(f"Cloning {url} \u2026")
+        QApplication.processEvents()
+
         try:
-            self._repo_ctrl.clone_repo(dialog.clone_url, dialog.clone_destination)
+            self._repo_ctrl.clone_repo(
+                url, dest,
+                ssh_key_path=ssh_key,
+                https_username=https_username,
+                https_token=https_token,
+            )
         except git.GitCommandError as exc:
+            stderr = getattr(exc, "stderr", "") or str(exc)
             QMessageBox.critical(
                 self,
                 "Clone Failed",
-                f"Git reported an error while cloning:\n\n{exc.stderr.strip()}",
+                f"Git reported an error while cloning:\n\n{stderr.strip()}",
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Clone Failed", str(exc))
+        finally:
+            self._set_toolbar_enabled(self._repo_ctrl.is_open)
+            self.statusBar().showMessage(
+                self._repo_ctrl.repo_path if self._repo_ctrl.is_open else "No repository open"
+            )
 
     # ── Repository signal handlers ────────────────────────────────────
 
@@ -485,15 +531,14 @@ class MainWindow(QMainWindow):
         self._set_toolbar_enabled(True)
 
         # Apply active profile to the newly opened repo if one is set
-        if self._profile_ctrl.active_profile and self._repo_ctrl.repo:
+        active = self._profile_ctrl.active_profile
+        if active and self._repo_ctrl.repo:
             try:
                 self._profile_ctrl.apply_to_repo(self._repo_ctrl.repo)
-                # Update SSH key on toolbar controller from active profile
-                self._toolbar_ctrl.set_ssh_key(
-                    self._profile_ctrl.active_profile.ssh_key_path or ""
-                )
             except Exception:  # noqa: BLE001
                 pass
+        # Always sync profile (including auth credentials) to toolbar controller
+        self._toolbar_ctrl.set_profile(active)
 
     def _on_repo_closed(self) -> None:
         """Triggered by RepositoryController.repo_closed."""
@@ -525,6 +570,34 @@ class MainWindow(QMainWindow):
     def _on_file_selected_for_diff(self, path: str, is_staged: bool) -> None:
         """Forward a file-click from the staging widget to the diff viewer."""
         self._diff_viewer.show_diff(path, is_staged)
+
+    def _open_commit_dialog(self) -> None:
+        """Open the CommitDialog workspace when the user clicks 'Commit Changes…'."""
+        dialog = CommitDialog(
+            staging_ctrl=self._staging_ctrl,
+            profile_ctrl=self._profile_ctrl,
+            repo_name=self._repo_ctrl.repo_name,
+            parent=self,
+        )
+        dialog.exec()
+        # Graph reload is triggered automatically via _on_staging_commit_made
+        # which is connected to staging_ctrl.commit_made.
+
+    def _on_staging_commit_made(self, short_hash: str) -> None:
+        """Reload the commit graph after a successful commit from CommitDialog."""
+        self._reload_graph()
+
+    def _auto_load_startup_repo(self) -> None:
+        """Auto-open the most-recently-used repository when the app launches.
+
+        Called via QTimer.singleShot(0, ...) in __init__ so the window is
+        fully visible before any blocking I/O runs.
+        """
+        if self._repo_ctrl.is_open:
+            return  # Already have a repo open (shouldn't happen at startup)
+        data = self._repo_combo.currentData()
+        if isinstance(data, str) and data and data not in ("", "__CLEAR__"):
+            self._open_recent_repo(data)
 
     def _on_checkout_requested(self, branch_name: str) -> None:
         """Triggered by SidebarWidget.checkout_requested (user double-clicked)."""
@@ -574,16 +647,14 @@ class MainWindow(QMainWindow):
 
     def _on_active_profile_changed(self, profile: Profile | None) -> None:
         self._refresh_profile_status()
-        # Apply the new profile to the open repo immediately if one is loaded
+        # Apply the new profile's git identity to the open repo
         if profile and self._repo_ctrl.repo:
             try:
                 self._profile_ctrl.apply_to_repo(self._repo_ctrl.repo)
             except Exception:  # noqa: BLE001
                 pass
-        # Update SSH key on the toolbar controller
-        self._toolbar_ctrl.set_ssh_key(
-            profile.ssh_key_path if profile and profile.ssh_key_path else ""
-        )
+        # Sync auth credentials (SSH key or HTTPS token) to the toolbar controller
+        self._toolbar_ctrl.set_profile(profile)
 
     # ── Commit inspector signal handlers ──────────────────────────────
 
@@ -676,6 +747,136 @@ class MainWindow(QMainWindow):
         except git.GitCommandError as exc:
             QMessageBox.critical(self, "Checkout Failed",
                                  exc.stderr.strip() if exc.stderr else str(exc))
+
+    # ── Tag management handlers (Phase 15) ────────────────────────────
+
+    def _on_checkout_tag_requested(self, tag_name: str) -> None:
+        """Sidebar double-click or context menu → Checkout tag (detached HEAD)."""
+        reply = QMessageBox.warning(
+            self,
+            "Checkout Tag — Detached HEAD",
+            f"Checking out tag <b>{tag_name}</b> will put the repository in "
+            "<i>detached HEAD</i> state.<br><br>"
+            "You can look around and make experimental commits, but any commits "
+            "will not belong to a branch and may be lost unless you create a new "
+            "branch: <tt>git switch -c &lt;new-branch&gt;</tt>.<br><br>"
+            "Proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._repo_ctrl.checkout_tag(tag_name)
+            self._populate_sidebar()
+            self._update_window_title()
+            self._update_repo_status_label()
+            self._staging_ctrl.status_changed.emit()
+        except git.GitCommandError as exc:
+            QMessageBox.critical(
+                self, "Checkout Failed",
+                f"<pre>{exc.stderr.strip() if exc.stderr else str(exc)}</pre>",
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Checkout Error", str(exc))
+
+    def _on_create_tag(self, full_hash: str) -> None:
+        """Commit-graph context menu → Create Tag Here…"""
+        if not self._repo_ctrl.is_open:
+            return
+        dialog = CreateTagDialog(commit_short=full_hash[:12], parent=self)
+        if dialog.exec() != CreateTagDialog.DialogCode.Accepted:
+            return
+        try:
+            self._repo_ctrl.create_tag(
+                name=dialog.tag_name,
+                ref=full_hash,
+                message=dialog.tag_message,
+            )
+            # refs_updated signal triggers sidebar + graph refresh automatically
+        except git.GitCommandError as exc:
+            msg = exc.stderr.strip() if exc.stderr else str(exc)
+            if "already exists" in msg:
+                QMessageBox.warning(
+                    self, "Tag Already Exists",
+                    f"A tag named <b>{dialog.tag_name}</b> already exists.<br>"
+                    "Choose a different name.",
+                )
+            else:
+                QMessageBox.critical(self, "Tag Creation Failed", f"<pre>{msg}</pre>")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Tag Creation Error", str(exc))
+
+    def _on_delete_tag(self, tag_name: str) -> None:
+        """Sidebar context menu → Delete Tag (confirmation already shown in sidebar)."""
+        if not self._repo_ctrl.is_open:
+            return
+        try:
+            self._repo_ctrl.delete_tag(tag_name)
+            # refs_updated signal triggers sidebar + graph refresh automatically
+        except git.GitCommandError as exc:
+            QMessageBox.critical(
+                self, "Delete Tag Failed",
+                f"<pre>{exc.stderr.strip() if exc.stderr else str(exc)}</pre>",
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Delete Tag Error", str(exc))
+
+    def _on_push_tag(self, tag_name: str) -> None:
+        """Sidebar context menu → Push Tag to Remote."""
+        if not self._repo_ctrl.is_open:
+            return
+        if not self._repo_ctrl.repo or not self._repo_ctrl.repo.remotes:
+            QMessageBox.warning(
+                self, "No Remote",
+                "This repository has no configured remotes.<br>"
+                "Add a remote with <tt>git remote add origin &lt;url&gt;</tt> first.",
+            )
+            return
+
+        remote_name = self._repo_ctrl.repo.remotes[0].name
+        reply = QMessageBox.question(
+            self,
+            "Push Tag",
+            f"Push tag <b>{tag_name}</b> to remote <b>{remote_name}</b>?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from src.utils.credentials import AuthMethod, get_token
+
+        ssh_key        = ""
+        https_username = ""
+        https_token    = ""
+        active = self._profile_ctrl.active_profile
+        if active:
+            if active.auth_method == AuthMethod.HTTPS:
+                https_username = active.https_username
+                https_token    = get_token(https_username)
+            elif active.ssh_key_path:
+                ssh_key = active.ssh_key_path
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._repo_ctrl.push_tag(
+                tag_name,
+                ssh_key_path=ssh_key,
+                https_username=https_username,
+                https_token=https_token,
+            )
+            QMessageBox.information(
+                self, "Push Tag",
+                f"Tag <b>{tag_name}</b> pushed to <b>{remote_name}</b> successfully.",
+            )
+        except git.GitCommandError as exc:
+            QMessageBox.critical(
+                self, "Push Tag Failed",
+                f"<pre>{exc.stderr.strip() if exc.stderr else str(exc)}</pre>",
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Push Tag Error", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
 
     # ── Conflict banner ───────────────────────────────────────────────
 
@@ -861,9 +1062,22 @@ class MainWindow(QMainWindow):
     def _on_toolbar_refs_changed(self) -> None:
         """Remote refs changed: reload sidebar and commit graph."""
         self._populate_sidebar()
+        self._reload_graph()
+
+    def _on_refs_updated(self) -> None:
+        """Tags created/deleted: refresh sidebar + graph badges."""
+        self._populate_sidebar()
+        self._reload_graph()
+
+    def _reload_graph(self) -> None:
+        """Helper: reload the first page of commits with up-to-date tag badges."""
         commits = self._repo_ctrl.load_commits(max_count=self._GRAPH_PAGE_SIZE + 1)
         has_more = len(commits) > self._GRAPH_PAGE_SIZE
-        self._graph_widget.populate(commits[: self._GRAPH_PAGE_SIZE], has_more=has_more)
+        self._graph_widget.populate(
+            commits[: self._GRAPH_PAGE_SIZE],
+            has_more=has_more,
+            tags_by_hash=self._repo_ctrl.tags_for_commit(),
+        )
 
     def _on_toolbar_working_tree_changed(self) -> None:
         """Working tree changed (pull / pop): refresh staging area."""

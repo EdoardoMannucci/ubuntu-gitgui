@@ -106,20 +106,62 @@ class RepositoryController(QObject):
         self._repo = git.Repo.init(path)
         self.repo_opened.emit(str(self._repo.working_tree_dir))
 
-    def clone_repo(self, url: str, destination: str) -> None:
+    def clone_repo(
+        self,
+        url: str,
+        destination: str,
+        ssh_key_path: str = "",
+        https_username: str = "",
+        https_token: str = "",
+    ) -> None:
         """Clone *url* into *destination* and open the result.
 
         This is a blocking operation. The caller should show a busy cursor
         (handled in MainWindow) to give the user feedback.
 
+        Authentication is injected via environment variables only — credentials
+        are never embedded in the URL or written to .git/config:
+          - SSH:   ``GIT_SSH_COMMAND`` pointing to the private key.
+          - HTTPS: A temporary ``GIT_ASKPASS`` script (mode 700) that echoes
+                   the username / token; deleted immediately after clone.
+
+        Args:
+            url:            Remote URL (HTTPS or SSH).
+            destination:    Local path where the repository will be created.
+            ssh_key_path:   Path to SSH private key (SSH auth).
+            https_username: HTTPS username (HTTPS auth).
+            https_token:    Personal Access Token or password (HTTPS auth).
+
         Raises:
             git.GitCommandError: on network failure, invalid URL, etc.
         """
+        from src.utils.credentials import AskPassScript
+
         QApplication.setOverrideCursor(
             __import__("PyQt6.QtCore", fromlist=["Qt"]).Qt.CursorShape.WaitCursor
         )
         try:
-            self._repo = git.Repo.clone_from(url, destination)
+            env: dict[str, str] = {}
+
+            if ssh_key_path:
+                env["GIT_SSH_COMMAND"] = (
+                    f"ssh -i {shlex.quote(ssh_key_path)} -o IdentitiesOnly=yes"
+                )
+
+            if https_username and https_token:
+                askpass = AskPassScript(https_username, https_token)
+                script_path = askpass.__enter__()
+                try:
+                    env["GIT_ASKPASS"]         = script_path
+                    env["GIT_TERMINAL_PROMPT"] = "0"
+                    self._repo = git.Repo.clone_from(url, destination, env=env)
+                finally:
+                    askpass.__exit__(None, None, None)
+            else:
+                self._repo = git.Repo.clone_from(
+                    url, destination, env=env if env else None
+                )
+
             self.repo_opened.emit(str(self._repo.working_tree_dir))
         finally:
             QApplication.restoreOverrideCursor()
@@ -347,31 +389,56 @@ class RepositoryController(QObject):
         self._repo.delete_tag(name)
         self.refs_updated.emit()
 
-    def push_tag(self, name: str, ssh_key_path: str = "") -> None:
+    def push_tag(
+        self,
+        name: str,
+        ssh_key_path: str = "",
+        https_username: str = "",
+        https_token: str = "",
+    ) -> None:
         """Push a single tag to the first configured remote.
 
-        Uses GIT_SSH_COMMAND with *ssh_key_path* if provided, matching the
-        same pattern as ToolbarController to keep SSH handling consistent.
+        Supports both SSH and HTTPS auth using the same injection approach as
+        the other network methods:
+          - SSH:   GIT_SSH_COMMAND env var.
+          - HTTPS: temporary GIT_ASKPASS script (deleted after push).
 
         Args:
-            name:         Tag name to push (e.g. ``"v1.0.0"``).
-            ssh_key_path: Absolute path to an SSH private key, or ``""`` to
-                          use the system default.
+            name:           Tag name to push (e.g. ``"v1.0.0"``).
+            ssh_key_path:   SSH private key path (SSH auth).
+            https_username: HTTPS username (HTTPS auth).
+            https_token:    PAT / password (HTTPS auth).
 
         Raises:
             git.GitCommandError: on push failure.
             RuntimeError: if no repository is open or no remotes configured.
         """
+        from src.utils.credentials import AskPassScript
+
         if self._repo is None:
             raise RuntimeError("No repository open.")
         if not self._repo.remotes:
             raise RuntimeError("No remote configured.")
 
-        ssh_cmd = (
-            f"ssh -i {shlex.quote(ssh_key_path)} -o IdentitiesOnly=yes"
-            if ssh_key_path
-            else ""
-        )
-        env_override = {"GIT_SSH_COMMAND": ssh_cmd} if ssh_cmd else {}
-        with self._repo.git.custom_environment(**env_override):
-            self._repo.git.push(self._repo.remotes[0].name, f"refs/tags/{name}")
+        remote = self._repo.remotes[0].name
+
+        if https_username and https_token:
+            askpass = AskPassScript(https_username, https_token)
+            script_path = askpass.__enter__()
+            try:
+                with self._repo.git.custom_environment(
+                    GIT_ASKPASS=script_path,
+                    GIT_TERMINAL_PROMPT="0",
+                ):
+                    self._repo.git.push(remote, f"refs/tags/{name}")
+            finally:
+                askpass.__exit__(None, None, None)
+        else:
+            ssh_cmd = (
+                f"ssh -i {shlex.quote(ssh_key_path)} -o IdentitiesOnly=yes"
+                if ssh_key_path
+                else ""
+            )
+            env_override = {"GIT_SSH_COMMAND": ssh_cmd} if ssh_cmd else {}
+            with self._repo.git.custom_environment(**env_override):
+                self._repo.git.push(remote, f"refs/tags/{name}")

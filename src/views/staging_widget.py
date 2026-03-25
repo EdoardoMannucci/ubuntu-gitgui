@@ -1,8 +1,7 @@
 """
-StagingWidget — the top-right panel showing unstaged files, staged files,
-and the commit form.
+StagingWidget — the top-right panel showing unstaged files and staged files.
 
-Layout (vertical, three sections):
+Layout (vertical, two sections + footer button):
     ┌────────────────────────────────────────┐
     │ UNSTAGED (N)          [Stage All ↓]    │
     │ ┌──────────────────────────────────┐   │
@@ -17,19 +16,15 @@ Layout (vertical, three sections):
     │ └──────────────────────────────────┘   │
     │              [↓ Unstage Selected]       │
     ├────────────────────────────────────────┤
-    │ Commit message                         │
-    │ ┌──────────────────────────────────┐   │
-    │ │                                  │   │  ← QPlainTextEdit
-    │ └──────────────────────────────────┘   │
-    │                         [Commit ✓]     │
+    │         [  Commit Changes…  ✓  ]       │
     └────────────────────────────────────────┘
 
-The widget is purely presentational: all git operations are delegated to
-StagingController.  A ProfileController reference is used only at commit time
-to resolve the active author identity.
+The commit message inputs have been moved to CommitDialog (opened by the
+footer button).  All git operations are still delegated to StagingController.
 
-Signal emitted for Phase 6 integration:
-    file_selected(path: str, is_staged: bool)
+Signals:
+    file_selected(path: str, is_staged: bool) — file clicked for diff view
+    open_commit_dialog_requested()             — "Commit Changes…" button clicked
 """
 
 from __future__ import annotations
@@ -43,9 +38,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
-    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -85,10 +78,13 @@ class _FileItem(QListWidgetItem):
 # ── StagingWidget ─────────────────────────────────────────────────────────────
 
 class StagingWidget(QWidget):
-    """Full staging-area panel: unstaged list, staged list, commit form."""
+    """Staging-area panel: unstaged list, staged list, and commit launcher."""
 
-    # Emitted when the user clicks a file (for the Phase 6 diff viewer)
+    # Emitted when the user clicks a file (for the diff viewer)
     file_selected = pyqtSignal(str, bool)  # (repo-relative path, is_staged)
+
+    # Emitted when the user clicks "Commit Changes…"
+    open_commit_dialog_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -102,7 +98,6 @@ class StagingWidget(QWidget):
 
         # Connect controller signal → view refresh
         self._staging.status_changed.connect(self.refresh)
-        self._staging.commit_made.connect(self._on_commit_made)
 
         self._build_ui()
         self.refresh()
@@ -120,12 +115,25 @@ class StagingWidget(QWidget):
 
         list_splitter.addWidget(self._build_unstaged_section())
         list_splitter.addWidget(self._build_staged_section())
-        list_splitter.setSizes([200, 160])  # unstaged slightly taller by default
+        list_splitter.setSizes([200, 160])
 
         root.addWidget(list_splitter, stretch=1)
 
-        # ── Commit area (fixed at bottom) ─────────────────────────
-        root.addWidget(self._build_commit_section())
+        # ── Footer: prominent "Commit Changes…" launcher button ───
+        footer = QWidget()
+        footer.setObjectName("commit_footer")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(8, 8, 8, 8)
+
+        self._commit_changes_btn = QPushButton("  Commit Changes\u2026")
+        self._commit_changes_btn.setIcon(get_icon("commit"))
+        self._commit_changes_btn.setObjectName("accent_btn")
+        self._commit_changes_btn.setMinimumHeight(36)
+        self._commit_changes_btn.setEnabled(False)
+        self._commit_changes_btn.clicked.connect(self.open_commit_dialog_requested)
+        footer_layout.addWidget(self._commit_changes_btn)
+
+        root.addWidget(footer)
 
     def _build_unstaged_section(self) -> QWidget:
         """Unstaged-files list with header and staging buttons."""
@@ -216,47 +224,6 @@ class StagingWidget(QWidget):
 
         return container
 
-    def _build_commit_section(self) -> QWidget:
-        """Commit message text area + Commit button."""
-        container = QWidget()
-        container.setObjectName("commit_area")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(6, 4, 6, 6)
-        layout.setSpacing(4)
-
-        msg_label = QLabel("COMMIT MESSAGE")
-        msg_label.setObjectName("section_title")
-        layout.addWidget(msg_label)
-
-        self._commit_msg = QPlainTextEdit()
-        self._commit_msg.setObjectName("commit_msg_edit")
-        self._commit_msg.setPlaceholderText(
-            "Summarize your changes (≤ 72 chars on first line)\n\n"
-            "Optional: longer description after a blank line."
-        )
-        self._commit_msg.setFixedHeight(80)
-        self._commit_msg.textChanged.connect(self._refresh_commit_button)
-        layout.addWidget(self._commit_msg)
-
-        # Bottom row: profile indicator + Commit button
-        action_row = QHBoxLayout()
-
-        self._author_label = QLabel()
-        self._author_label.setObjectName("author_label")
-        action_row.addWidget(self._author_label)
-        action_row.addStretch()
-
-        self._commit_btn = QPushButton("Commit")
-        self._commit_btn.setIcon(get_icon("commit"))
-        self._commit_btn.setObjectName("accent_btn")
-        self._commit_btn.setEnabled(False)
-        self._commit_btn.setFixedWidth(110)
-        self._commit_btn.clicked.connect(self._on_commit)
-        action_row.addWidget(self._commit_btn)
-
-        layout.addLayout(action_row)
-        return container
-
     # ── Public API ────────────────────────────────────────────────────
 
     def refresh(self) -> None:
@@ -271,7 +238,6 @@ class StagingWidget(QWidget):
         )
         self._refresh_counts()
         self._refresh_buttons()
-        self._refresh_author_label()
 
     # ── Private helpers ───────────────────────────────────────────────
 
@@ -279,7 +245,6 @@ class StagingWidget(QWidget):
         self, list_widget: QListWidget, entries: list[FileEntry]
     ) -> None:
         """Rebuild *list_widget* from *entries*, preserving selection where possible."""
-        # Preserve the paths that were selected so we can restore selection
         previously_selected: set[str] = {
             item.entry.path  # type: ignore[attr-defined]
             for item in list_widget.selectedItems()
@@ -314,25 +279,8 @@ class StagingWidget(QWidget):
         self._unstage_sel_btn.setEnabled(
             has_repo and len(self._staged_list.selectedItems()) > 0
         )
-        self._refresh_commit_button()
-
-    def _refresh_commit_button(self) -> None:
-        """Commit button is enabled only when there are staged files AND a message."""
-        has_staged  = self._staged_list.count() > 0
-        has_message = bool(self._commit_msg.toPlainText().strip())
-        self._commit_btn.setEnabled(
-            self._staging.has_repo and has_staged and has_message
-        )
-
-    def _refresh_author_label(self) -> None:
-        """Show the active profile name/email that will be used for the next commit."""
-        profile = self._profile.active_profile
-        if profile:
-            self._author_label.setText(
-                f"✎  {profile.git_name} <{profile.git_email}>"
-            )
-        else:
-            self._author_label.setText("⚠  No active profile — using git config")
+        # "Commit Changes…" is available as long as a repo is open
+        self._commit_changes_btn.setEnabled(has_repo)
 
     # ── Slots: staging operations ─────────────────────────────────────
 
@@ -371,45 +319,6 @@ class StagingWidget(QWidget):
             self._staging.unstage_all()
         except git.GitCommandError as exc:
             QMessageBox.warning(self, "Unstage All Failed", str(exc))
-
-    # ── Slots: commit ─────────────────────────────────────────────────
-
-    def _on_commit(self) -> None:
-        """Gather identity from the active profile and execute the commit."""
-        message = self._commit_msg.toPlainText().strip()
-        if not message:
-            QMessageBox.warning(self, "Empty Message", "Please enter a commit message.")
-            return
-
-        # Resolve author identity: active profile → git config fallback
-        profile = self._profile.active_profile
-        if profile:
-            git_name  = profile.git_name
-            git_email = profile.git_email
-        else:
-            # Read from the repo's git config (local → global → system)
-            try:
-                repo = self._staging._repo  # type: ignore[attr-defined]
-                with repo.config_reader() as cfg:
-                    git_name  = cfg.get_value("user", "name",  "Unknown")
-                    git_email = cfg.get_value("user", "email", "unknown@unknown")
-            except Exception:
-                git_name, git_email = "Unknown", "unknown@unknown"
-
-        try:
-            short_hash = self._staging.commit(message, git_name, git_email)
-            self._commit_msg.clear()
-            # Refresh will be triggered by staging_ctrl.status_changed signal
-        except ValueError as exc:
-            QMessageBox.warning(self, "Commit Cancelled", str(exc))
-        except git.GitCommandError as exc:
-            QMessageBox.critical(self, "Commit Failed", str(exc))
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Commit Error", str(exc))
-
-    def _on_commit_made(self, short_hash: str) -> None:
-        """Show a brief success notification in the author label."""
-        self._author_label.setText(f"✓  Committed {short_hash}")
 
     # ── Selection change slots (update button enabled state) ──────────
 

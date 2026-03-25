@@ -1,0 +1,581 @@
+/*
+ * light.qss — "GitHub Light" design system for ubuntu-gitgui
+ *
+ * Surface hierarchy (tonal stepping, light → dark):
+ *   #ffffff  surface         — main background
+ *   #f6f8fa  surface_low     — sidebars, secondary panels (GitHub grey)
+ *   #eaeef2  surface_mid     — elevated areas, hover rows
+ *   #d0d7de  surface_high    — borders, dividers
+ *
+ * Accents:
+ *   #0969da  primary         — GitHub blue
+ *   #0550ae  primary_dark    — pressed / gradient endpoint
+ *   #8250df  secondary       — purple (tags, profile badge)
+ *   #cf222e  error           — GitHub red
+ *
+ * Text:
+ *   #1f2328  on_surface          — primary text
+ *   #57606a  on_surface_variant  — metadata, timestamps
+ *   #8c959f  outline_variant     — ghost text / placeholders
+ */
+
+/* ── Reset & Base ─────────────────────────────────────────────────── */
+QWidget {
+    background-color: #ffffff;
+    color: #1f2328;
+    font-family: "Inter", "Ubuntu", "Noto Sans", sans-serif;
+    font-size: 13px;
+    border: none;
+    selection-background-color: #dbeafe;
+    selection-color: #0969da;
+}
+
+QMainWindow {
+    background-color: #ffffff;
+}
+
+/* ── Menu Bar ─────────────────────────────────────────────────────── */
+QMenuBar {
+    background-color: #f6f8fa;
+    color: #1f2328;
+    padding: 2px 4px;
+    border-bottom: 1px solid #d0d7de;
+}
+QMenuBar::item {
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: transparent;
+}
+QMenuBar::item:selected {
+    background-color: #eaeef2;
+    color: #0969da;
+}
+
+QMenu {
+    background-color: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    padding: 6px 4px;
+}
+QMenu::item {
+    padding: 7px 24px 7px 16px;
+    border-radius: 6px;
+    color: #1f2328;
+}
+QMenu::item:selected {
+    background-color: #eaeef2;
+    color: #0969da;
+}
+QMenu::item:disabled {
+    color: #8c959f;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #d0d7de;
+    margin: 5px 8px;
+}
+QMenu::indicator {
+    width: 16px;
+    height: 16px;
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────── */
+QToolBar {
+    background-color: #f6f8fa;
+    border: none;
+    border-bottom: 1px solid #d0d7de;
+    spacing: 2px;
+    padding: 4px 8px;
+}
+QToolBar QToolButton {
+    background-color: transparent;
+    color: #57606a;
+    border: none;
+    border-radius: 8px;
+    padding: 5px 12px 4px 12px;
+    min-width: 52px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QToolBar QToolButton:hover {
+    background-color: #eaeef2;
+    color: #1f2328;
+}
+QToolBar QToolButton:pressed {
+    background-color: #d0d7de;
+    color: #0969da;
+}
+QToolBar QToolButton:disabled {
+    color: #8c959f;
+}
+QToolBar::separator {
+    background-color: #d0d7de;
+    width: 1px;
+    margin: 8px 4px;
+}
+
+/* ── ComboBox (repo selector in toolbar) ─────────────────────────── */
+QComboBox {
+    background-color: #ffffff;
+    color: #1f2328;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 5px 28px 5px 10px;
+    font-size: 12px;
+    min-width: 160px;
+}
+QComboBox:hover {
+    border-color: #0969da;
+}
+QComboBox:focus {
+    border-color: #0969da;
+    color: #0969da;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+QComboBox::down-arrow {
+    image: none;
+    width: 8px;
+    height: 8px;
+}
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    color: #1f2328;
+    selection-background-color: #eaeef2;
+    selection-color: #0969da;
+    padding: 4px;
+}
+
+/* ── Splitter ────────────────────────────────────────────────────── */
+QSplitter::handle {
+    background-color: #d0d7de;
+    width: 1px;
+    height: 1px;
+}
+QSplitter::handle:hover {
+    background-color: #0969da;
+}
+
+/* ── Sidebar tree ────────────────────────────────────────────────── */
+QTreeWidget {
+    background-color: #f6f8fa;
+    border: none;
+    outline: none;
+    padding: 4px 0;
+}
+QTreeWidget::item {
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: #57606a;
+    font-size: 12px;
+}
+QTreeWidget::item:hover {
+    background-color: #eaeef2;
+    color: #1f2328;
+}
+QTreeWidget::item:selected {
+    background-color: #dbeafe;
+    color: #0969da;
+    border-left: 3px solid #0969da;
+    padding-left: 5px;
+}
+QTreeWidget QHeaderView::section {
+    background-color: #f6f8fa;
+    color: #8c959f;
+    border: none;
+    padding: 4px 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* ── Commit graph table ──────────────────────────────────────────── */
+QTableView#commit_table {
+    background-color: #ffffff;
+    alternate-background-color: #ffffff;
+    border: none;
+    outline: none;
+    gridline-color: transparent;
+    show-decoration-selected: 0;
+}
+QTableView#commit_table::item {
+    padding: 0 8px;
+    border: none;
+    color: #1f2328;
+}
+QTableView#commit_table::item:selected {
+    background-color: #eaeef2;
+    color: #0969da;
+    border-left: none;
+}
+QTableView#commit_table::item:hover {
+    background-color: #f6f8fa;
+}
+QHeaderView::section {
+    background-color: #ffffff;
+    color: #8c959f;
+    border: none;
+    border-bottom: 1px solid #eaeef2;
+    padding: 4px 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+/* ── Text areas (diff, log, commit message) ──────────────────────── */
+QTextEdit, QPlainTextEdit {
+    background-color: #f6f8fa;
+    color: #1f2328;
+    border: none;
+    padding: 10px;
+    font-family: "JetBrains Mono", "Fira Code", "Ubuntu Mono", monospace;
+    font-size: 12px;
+    selection-background-color: #dbeafe;
+    selection-color: #0969da;
+}
+
+/* ── Diff viewer ─────────────────────────────────────────────────── */
+QWidget#diff_viewer_container {
+    background-color: #ffffff;
+}
+QLabel#diff_header {
+    background-color: #f6f8fa;
+    color: #57606a;
+    border: none;
+    border-bottom: 1px solid #eaeef2;
+    padding: 6px 10px;
+    font-family: "JetBrains Mono", "Fira Code", "Ubuntu Mono", monospace;
+    font-size: 11px;
+}
+QTextEdit#diff_edit {
+    background-color: #ffffff;
+    color: #1f2328;
+    border: none;
+    padding: 8px;
+    selection-background-color: #dbeafe;
+    selection-color: #0969da;
+}
+
+/* ── Staging area ────────────────────────────────────────────────── */
+QWidget#commit_area {
+    background-color: #f6f8fa;
+    border: none;
+}
+QPlainTextEdit#commit_msg_edit {
+    background-color: #ffffff;
+    color: #1f2328;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: "Inter", "Ubuntu", sans-serif;
+    selection-background-color: #dbeafe;
+    selection-color: #0969da;
+}
+QPlainTextEdit#commit_msg_edit:focus {
+    border-color: #0969da;
+}
+QListWidget#file_list {
+    background-color: #f6f8fa;
+    border: none;
+    outline: none;
+    font-family: "JetBrains Mono", "Fira Code", "Ubuntu Mono", monospace;
+    font-size: 11px;
+    padding: 2px;
+}
+QListWidget#file_list::item {
+    padding: 4px 8px;
+    border-radius: 5px;
+    color: #57606a;
+}
+QListWidget#file_list::item:hover {
+    background-color: #eaeef2;
+    color: #1f2328;
+}
+QListWidget#file_list::item:selected {
+    background-color: #dbeafe;
+    color: #0969da;
+    border-left: 3px solid #0969da;
+    padding-left: 5px;
+}
+QLabel#author_label {
+    color: #0969da;
+    font-size: 11px;
+}
+
+/* ── Generic list widget ─────────────────────────────────────────── */
+QListWidget {
+    background-color: #f6f8fa;
+    border: none;
+    border-radius: 8px;
+    outline: none;
+    padding: 2px;
+}
+QListWidget::item {
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+}
+QListWidget::item:hover {
+    background-color: #eaeef2;
+    color: #1f2328;
+}
+QListWidget::item:selected {
+    background-color: #dbeafe;
+    color: #0969da;
+}
+
+/* ── Labels ──────────────────────────────────────────────────────── */
+QLabel {
+    color: #57606a;
+    font-size: 12px;
+    background: transparent;
+}
+QLabel#section_title {
+    color: #8c959f;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 8px 10px 4px 10px;
+    background: transparent;
+}
+QLabel#branch_status_label {
+    color: #0969da;
+    font-family: "JetBrains Mono", "Fira Code", "Ubuntu Mono", monospace;
+    font-size: 12px;
+    padding-left: 8px;
+    background: transparent;
+}
+QLabel#profile_status_label {
+    color: #8250df;
+    font-size: 12px;
+    padding-right: 8px;
+    background: transparent;
+}
+QLabel#active_profile_label {
+    background-color: #f6f8fa;
+    color: #0969da;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+QLabel#clone_preview_label {
+    background-color: #f6f8fa;
+    color: #57606a;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+QLabel#diff_header {
+    background-color: #f6f8fa;
+    color: #57606a;
+    padding: 6px 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+}
+
+/* ── Status Bar ──────────────────────────────────────────────────── */
+QStatusBar {
+    background-color: #f6f8fa;
+    color: #57606a;
+    border-top: 1px solid #d0d7de;
+    font-size: 12px;
+    padding: 2px 6px;
+}
+QStatusBar::item {
+    border: none;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────── */
+QScrollBar:vertical {
+    background-color: transparent;
+    width: 6px;
+    border-radius: 3px;
+}
+QScrollBar::handle:vertical {
+    background-color: #d0d7de;
+    border-radius: 3px;
+    min-height: 28px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #8c959f;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar:horizontal {
+    background-color: transparent;
+    height: 6px;
+    border-radius: 3px;
+}
+QScrollBar::handle:horizontal {
+    background-color: #d0d7de;
+    border-radius: 3px;
+    min-width: 28px;
+}
+QScrollBar::handle:horizontal:hover {
+    background-color: #8c959f;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────── */
+QPushButton {
+    background-color: #f6f8fa;
+    color: #1f2328;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #eaeef2;
+    border-color: #8c959f;
+    color: #0969da;
+}
+QPushButton:pressed {
+    background-color: #d0d7de;
+}
+QPushButton:disabled {
+    color: #8c959f;
+    background-color: #f6f8fa;
+    border-color: #eaeef2;
+}
+QPushButton#accent_btn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #0969da, stop:1 #0550ae);
+    color: #ffffff;
+    border: none;
+    font-weight: 700;
+    border-radius: 10px;
+}
+QPushButton#accent_btn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #218bff, stop:1 #0969da);
+}
+QPushButton#danger_btn {
+    background-color: #f6f8fa;
+    color: #cf222e;
+    border: 1px solid #d0d7de;
+}
+QPushButton#danger_btn:hover {
+    background-color: #cf222e;
+    color: #ffffff;
+    border-color: #cf222e;
+}
+QPushButton#load_more_btn {
+    background-color: #ffffff;
+    color: #8c959f;
+    border: none;
+    border-top: 1px solid #eaeef2;
+    border-radius: 0;
+    padding: 7px 0;
+    font-size: 12px;
+}
+QPushButton#load_more_btn:hover {
+    background-color: #f6f8fa;
+    color: #57606a;
+}
+
+/* ── Dialog button box ───────────────────────────────────────────── */
+QDialogButtonBox QPushButton {
+    min-width: 80px;
+}
+
+/* ── Form inputs ─────────────────────────────────────────────────── */
+QLineEdit {
+    background-color: #ffffff;
+    color: #1f2328;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    selection-background-color: #dbeafe;
+    selection-color: #0969da;
+}
+QLineEdit:focus {
+    border-color: #0969da;
+    color: #1f2328;
+}
+
+/* ── Tab widget (Settings dialog) ────────────────────────────────── */
+QTabWidget::pane {
+    border: none;
+    background-color: #ffffff;
+}
+QTabBar::tab {
+    background-color: transparent;
+    color: #57606a;
+    padding: 7px 18px;
+    border: none;
+    border-radius: 0;
+    font-size: 12px;
+    font-weight: 500;
+}
+QTabBar::tab:selected {
+    color: #0969da;
+    border-bottom: 2px solid #0969da;
+    background-color: transparent;
+}
+QTabBar::tab:hover:!selected {
+    color: #1f2328;
+    background-color: #f6f8fa;
+}
+
+/* ── Dialogs ─────────────────────────────────────────────────────── */
+QDialog {
+    background-color: #ffffff;
+}
+QMessageBox {
+    background-color: #ffffff;
+}
+QMessageBox QLabel {
+    color: #1f2328;
+    font-size: 13px;
+    background: transparent;
+}
+QFileDialog {
+    background-color: #ffffff;
+}
+QFileDialog QLabel {
+    color: #1f2328;
+    background: transparent;
+}
+
+/* ── Conflict banner ─────────────────────────────────────────────── */
+QFrame#conflict_banner {
+    background-color: #fff8f0;
+    border: none;
+    border-bottom: 2px solid #cf222e;
+}
+QLabel#conflict_banner_label {
+    color: #cf222e;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 2px 4px;
+    background: transparent;
+}
+
+/* ── Frames ──────────────────────────────────────────────────────── */
+QFrame#commit_graph {
+    background-color: #ffffff;
+    border: none;
+}
+QFrame#staging_area {
+    background-color: #f6f8fa;
+    border: none;
+}
+QFrame#diff_viewer {
+    background-color: #ffffff;
+}

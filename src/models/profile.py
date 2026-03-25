@@ -13,11 +13,18 @@ Schema:
             "name": "Work",
             "git_name": "Jane Doe",
             "git_email": "jane@company.com",
-            "ssh_key_path": "/home/jane/.ssh/id_rsa_work"
+            "auth_method": "ssh",          ← "ssh" | "https"
+            "ssh_key_path": "/home/jane/.ssh/id_rsa_work",
+            "https_username": ""           ← HTTPS username (token in keyring)
         },
         ...
     ]
 }
+
+SECURITY: HTTPS tokens / passwords are NEVER written to this file.
+They are stored exclusively in the native OS secret store (GNOME Keyring /
+KWallet) via the ``keyring`` library.  The ``https_username`` field is the
+look-up key used to retrieve the token at auth time.
 """
 
 import json
@@ -26,6 +33,8 @@ import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from src.utils.credentials import AuthMethod
 
 logger = logging.getLogger(__name__)
 
@@ -42,25 +51,45 @@ PROFILES_FILE: Path = CONFIG_DIR / "profiles.json"
 class Profile:
     """Represents a single Git identity profile."""
 
-    name: str           # Display name, e.g. "Work", "Personal"
-    git_name: str       # Git user.name
-    git_email: str      # Git user.email
-    ssh_key_path: str   # Absolute path to the private SSH key (may be empty)
+    name: str               # Display name, e.g. "Work", "Personal"
+    git_name: str           # Git user.name
+    git_email: str          # Git user.email
+    auth_method: str        # AuthMethod.SSH or AuthMethod.HTTPS (stored as str)
+    ssh_key_path: str       # Absolute path to the private SSH key (may be empty)
+    https_username: str     # HTTPS username; token retrieved from keyring at runtime
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> dict:
-        """Serialise to a plain dict suitable for JSON encoding."""
-        return asdict(self)
+        """Serialise to a plain dict suitable for JSON encoding.
+
+        NOTE: the HTTPS token is intentionally excluded — it lives in the
+        OS keyring, not in this file.
+        """
+        return {
+            "id":             self.id,
+            "name":           self.name,
+            "git_name":       self.git_name,
+            "git_email":      self.git_email,
+            "auth_method":    self.auth_method,
+            "ssh_key_path":   self.ssh_key_path,
+            "https_username": self.https_username,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Profile":
-        """Deserialise from a plain dict (as loaded from JSON)."""
+        """Deserialise from a plain dict.
+
+        Handles legacy profiles (created before auth_method was introduced)
+        by defaulting to SSH so existing SSH-key profiles keep working.
+        """
         return cls(
             id=data["id"],
             name=data["name"],
             git_name=data["git_name"],
             git_email=data["git_email"],
+            auth_method=data.get("auth_method", AuthMethod.SSH.value),
             ssh_key_path=data.get("ssh_key_path", ""),
+            https_username=data.get("https_username", ""),
         )
 
     def __str__(self) -> str:
@@ -160,11 +189,8 @@ class ProfileRepository:
             "active_profile_id": self._active_id,
             "profiles": [p.to_dict() for p in self._profiles],
         }
-        # Write to a temp file first, then replace — avoids corruption on crash
         tmp_path = self._path.with_suffix(".json.tmp")
         with tmp_path.open("w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, ensure_ascii=False)
-        # Restrict permissions before the rename so the final file is never
-        # transiently readable by other users on the system.
         os.chmod(tmp_path, 0o600)
         tmp_path.replace(self._path)

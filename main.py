@@ -1,7 +1,7 @@
 """
 ubuntu-gitgui — entry point.
 
-Initialises the QApplication, applies the global dark stylesheet,
+Initialises the QApplication, applies the saved theme stylesheet,
 installs a QTranslator for the saved UI language (Phase 13),
 creates the MainWindow, and starts the Qt event loop.
 
@@ -23,7 +23,7 @@ from PyQt6.QtCore import QTranslator
 from PyQt6.QtWidgets import QApplication
 
 from src.utils.app_settings import load_settings
-from src.utils.styles import get_dark_stylesheet
+from src.utils.styles import get_stylesheet
 from src.views.main_window import MainWindow
 
 
@@ -59,8 +59,8 @@ def main() -> None:
     cfg = load_settings()
     _install_translator(app, str(cfg.get("language", "en")))
 
-    # Apply the global dark stylesheet before any widget is shown
-    app.setStyleSheet(get_dark_stylesheet())
+    # Apply the selected theme stylesheet before any widget is shown
+    app.setStyleSheet(get_stylesheet(str(cfg.get("theme", "dark"))))
 
     window = MainWindow()
     window.show()

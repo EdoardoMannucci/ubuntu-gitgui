@@ -12,12 +12,20 @@ receives via a QueuedConnection (the normal cross-thread mechanism in PyQt6).
 Sync operations (Branch, Stash, Pop) execute directly in the main thread
 because they work only on the local repository and are fast.
 
-SSH identity
-────────────
-Before each network operation the controller reads the active profile's
-ssh_key_path and passes a GIT_SSH_COMMAND string to the worker, which applies
-it only for the duration of that call.  The main thread's environment is
-never mutated.
+Authentication
+──────────────
+The controller supports two auth methods, resolved from the active profile:
+
+  SSH  — injects GIT_SSH_COMMAND into the worker's environment for the
+         duration of each call, then restores the previous value.
+
+  HTTPS — creates a temporary GIT_ASKPASS shell script (mode 700, owner-only)
+          that echoes the username / token, sets GIT_ASKPASS and
+          GIT_TERMINAL_PROMPT=0, then deletes the script in the finally block.
+          The token is retrieved from the OS keyring just before dispatch and
+          is passed as a dict to the worker (never logged).
+
+The main thread's environment is never permanently mutated.
 
 Signals (always delivered on the main thread via queued connections):
     operation_started(op_name)           — a git operation has begun
@@ -32,9 +40,15 @@ from __future__ import annotations
 import os
 import shlex
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
 import git
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+
+from src.utils.credentials import AskPassScript, AuthMethod, get_token
+
+if TYPE_CHECKING:
+    from src.models.profile import Profile
 
 
 # ── Op type enum ─────────────────────────────────────────────────────────────
@@ -52,12 +66,21 @@ class _GitWorker(QObject):
 
     Receives job requests via the ``_run`` signal (queued across threads) and
     emits ``finished`` / ``failed`` back to the main thread.
+
+    The ``auth`` payload is a plain dict with the following schema:
+
+        {"type": "none"}
+        {"type": "ssh",   "key_path": "/path/to/key"}
+        {"type": "https", "username": "user", "token": "ghp_..."}
+
+    The HTTPS token value is obtained from the OS keyring by the controller
+    in the main thread (before dispatch) and is carried inside the dict.
     """
 
-    # Input: the controller enqueues work by emitting this signal
-    _run = pyqtSignal(_Op, object, str)  # (op, repo, ssh_env)
+    # Input signal: the controller enqueues work by emitting this
+    _run = pyqtSignal(_Op, object, object)   # (op, repo, auth_dict)
 
-    # Output: results forwarded to the main thread
+    # Output signals: results forwarded to the main thread
     finished = pyqtSignal(_Op, str)   # (op, detail)
     failed   = pyqtSignal(_Op, str)   # (op, error_message)
 
@@ -65,33 +88,69 @@ class _GitWorker(QObject):
         super().__init__()
         self._run.connect(self._execute)
 
-    @pyqtSlot(_Op, object, str)
-    def _execute(self, op: _Op, repo: git.Repo, ssh_env: str) -> None:
-        # Apply SSH env for this call only
-        old_ssh = os.environ.get("GIT_SSH_COMMAND")
-        if ssh_env:
-            os.environ["GIT_SSH_COMMAND"] = ssh_env
-        elif old_ssh is not None:
-            del os.environ["GIT_SSH_COMMAND"]
+    @pyqtSlot(_Op, object, object)
+    def _execute(self, op: _Op, repo: git.Repo, auth: dict) -> None:
+        auth_type = auth.get("type", "none")
+
+        # Snapshot env values we may temporarily overwrite
+        old_ssh     = os.environ.get("GIT_SSH_COMMAND")
+        old_askpass = os.environ.get("GIT_ASKPASS")
+        old_prompt  = os.environ.get("GIT_TERMINAL_PROMPT")
+
+        askpass_ctx: AskPassScript | None = None
 
         try:
+            # ── Apply auth ─────────────────────────────────────────
+            if auth_type == "ssh":
+                key = auth.get("key_path", "")
+                if key:
+                    os.environ["GIT_SSH_COMMAND"] = (
+                        f"ssh -i {shlex.quote(key)} -o IdentitiesOnly=yes"
+                    )
+                elif old_ssh is not None:
+                    del os.environ["GIT_SSH_COMMAND"]
+
+            elif auth_type == "https":
+                askpass_ctx = AskPassScript(auth["username"], auth["token"])
+                script_path = askpass_ctx.__enter__()
+                os.environ["GIT_ASKPASS"]         = script_path
+                os.environ["GIT_TERMINAL_PROMPT"] = "0"
+
+            # ── Execute the git operation ──────────────────────────
             if op is _Op.FETCH:
                 detail = self._fetch(repo)
             elif op is _Op.PULL:
                 detail = self._pull(repo)
             else:
                 detail = self._push(repo)
+
             self.finished.emit(op, detail)
+
         except git.GitCommandError as exc:
             msg = exc.stderr.strip() if exc.stderr else str(exc)
             self.failed.emit(op, msg)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(op, str(exc))
+
         finally:
-            if old_ssh is not None:
-                os.environ["GIT_SSH_COMMAND"] = old_ssh
-            elif "GIT_SSH_COMMAND" in os.environ:
-                del os.environ["GIT_SSH_COMMAND"]
+            # ── Restore environment ────────────────────────────────
+            if auth_type == "ssh":
+                if old_ssh is not None:
+                    os.environ["GIT_SSH_COMMAND"] = old_ssh
+                elif "GIT_SSH_COMMAND" in os.environ:
+                    del os.environ["GIT_SSH_COMMAND"]
+
+            elif auth_type == "https":
+                if askpass_ctx is not None:
+                    askpass_ctx.__exit__(None, None, None)
+                for key, old_val in (
+                    ("GIT_ASKPASS",         old_askpass),
+                    ("GIT_TERMINAL_PROMPT", old_prompt),
+                ):
+                    if old_val is not None:
+                        os.environ[key] = old_val
+                    elif key in os.environ:
+                        del os.environ[key]
 
     # ── Git operations ────────────────────────────────────────────────
 
@@ -148,23 +207,21 @@ class ToolbarController(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._repo: git.Repo | None = None
-        self._ssh_key_path: str = ""
+        self._profile: "Profile | None" = None
+        self._ssh_key_path: str = ""   # fallback when no profile is set
         self._busy: bool = False
 
-        # Worker thread (lives for the entire application lifetime)
         self._thread = QThread(self)
         self._worker = _GitWorker()
         self._worker.moveToThread(self._thread)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.failed.connect(self._on_worker_failed)
-        # Clean up the thread when this QObject is destroyed
         self.destroyed.connect(self._shutdown_thread)
         self._thread.start()
 
     def _shutdown_thread(self) -> None:
-        """Quit the worker thread gracefully (called on destruction)."""
         self._thread.quit()
-        self._thread.wait(3000)  # up to 3 s
+        self._thread.wait(3000)
 
     # ── Repo / identity ───────────────────────────────────────────────
 
@@ -172,8 +229,24 @@ class ToolbarController(QObject):
         """Attach or detach the active repository."""
         self._repo = repo
 
+    def set_profile(self, profile: "Profile | None") -> None:
+        """Update the auth profile used for all network operations.
+
+        Replaces the legacy ``set_ssh_key()`` call — both SSH and HTTPS
+        profiles are handled here.
+        """
+        self._profile = profile
+        # Keep _ssh_key_path in sync for any remaining callers of set_ssh_key()
+        if profile and profile.auth_method == AuthMethod.SSH:
+            self._ssh_key_path = profile.ssh_key_path or ""
+        else:
+            self._ssh_key_path = ""
+
     def set_ssh_key(self, path: str) -> None:
-        """Update the SSH private-key path used for network operations."""
+        """Set the SSH private-key path directly (legacy / profile-less path).
+
+        Prefer ``set_profile()`` when a full profile is available.
+        """
         self._ssh_key_path = path or ""
 
     @property
@@ -194,13 +267,6 @@ class ToolbarController(QObject):
     # ── Sync local operations ─────────────────────────────────────────
 
     def create_branch(self, name: str) -> None:
-        """Create a new branch at HEAD and check it out.
-
-        Raises:
-            RuntimeError:          if no repo is open.
-            ValueError:            if *name* is blank.
-            git.GitCommandError:   on any git error.
-        """
         if self._repo is None:
             raise RuntimeError("No repository open.")
         name = name.strip()
@@ -211,12 +277,6 @@ class ToolbarController(QObject):
         self.operation_finished.emit("Branch", f"Switched to new branch '{name}'.")
 
     def stash(self) -> None:
-        """Push the current working tree onto the stash stack.
-
-        Raises:
-            RuntimeError:          if no repo is open.
-            git.GitCommandError:   on any git error.
-        """
         if self._repo is None:
             raise RuntimeError("No repository open.")
         output = self._repo.git.stash("push", "--include-untracked")
@@ -225,12 +285,6 @@ class ToolbarController(QObject):
         self.operation_finished.emit("Stash", detail)
 
     def pop_stash(self) -> None:
-        """Apply and drop the most-recent stash entry.
-
-        Raises:
-            RuntimeError:          if no repo is open.
-            git.GitCommandError:   on any git error (e.g. no stash, conflicts).
-        """
         if self._repo is None:
             raise RuntimeError("No repository open.")
         output = self._repo.git.stash("pop")
@@ -240,12 +294,32 @@ class ToolbarController(QObject):
 
     # ── Private helpers ───────────────────────────────────────────────
 
-    def _build_ssh_env(self) -> str:
-        if not self._ssh_key_path:
-            return ""
-        # shlex.quote() produces a shell-safe single-quoted token that survives
-        # any character in the path (spaces, double quotes, backticks, $, etc.).
-        return f"ssh -i {shlex.quote(self._ssh_key_path)} -o IdentitiesOnly=yes"
+    def _build_auth_info(self) -> dict:
+        """Build the auth dict to pass to the worker for the current profile."""
+        profile = self._profile
+
+        if profile is not None:
+            if profile.auth_method == AuthMethod.HTTPS:
+                # Retrieve token from the OS keyring in the main thread
+                token = get_token(profile.https_username)
+                return {
+                    "type":     "https",
+                    "username": profile.https_username,
+                    "token":    token,
+                }
+            if profile.auth_method == AuthMethod.SYSTEM:
+                # Let git use its own credential helper / ssh-agent; no injection
+                return {"type": "none"}
+            # SSH profile
+            key = profile.ssh_key_path or self._ssh_key_path
+            if key:
+                return {"type": "ssh", "key_path": key}
+            return {"type": "none"}
+
+        # No profile — fall back to the legacy ssh_key_path attribute
+        if self._ssh_key_path:
+            return {"type": "ssh", "key_path": self._ssh_key_path}
+        return {"type": "none"}
 
     def _dispatch_async(self, op: _Op) -> None:
         op_name = self._OP_NAMES[op]
@@ -257,9 +331,7 @@ class ToolbarController(QObject):
             return
         self._busy = True
         self.operation_started.emit(op_name)
-        # Emit the worker's internal signal — queued connection delivers it
-        # on the worker's thread automatically
-        self._worker._run.emit(op, self._repo, self._build_ssh_env())  # type: ignore[attr-defined]
+        self._worker._run.emit(op, self._repo, self._build_auth_info())  # type: ignore[attr-defined]
 
     # ── Worker callbacks (main thread) ────────────────────────────────
 

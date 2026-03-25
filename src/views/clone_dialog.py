@@ -47,10 +47,22 @@ def _repo_name_from_url(url: str) -> str:
 
 
 class CloneDialog(QDialog):
-    """Ask the user for a remote URL and a local parent directory."""
+    """Ask the user for a remote URL and a local parent directory.
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    Args:
+        ssh_key_path: Absolute path of the SSH key that will be used for the
+                      clone (from the active identity profile).  Shown
+                      informatively in the dialog; empty string means the
+                      system default will be used.
+    """
+
+    def __init__(
+        self,
+        ssh_key_path: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._ssh_key_path = ssh_key_path
         self.setWindowTitle("Clone Repository")
         self.setModal(True)
         self.setMinimumWidth(480)
@@ -86,6 +98,16 @@ class CloneDialog(QDialog):
         form.addRow("Clone into:", dest_row)
 
         root.addLayout(form)
+
+        # SSH key info label — only shown when a profile key is active
+        if self._ssh_key_path:
+            key_label = QLabel(
+                f"SSH key in use:  <code>{self._ssh_key_path}</code><br>"
+                "(from active identity profile)"
+            )
+            key_label.setWordWrap(True)
+            key_label.setStyleSheet("color: #aba9be; font-size: 11px;")
+            root.addWidget(key_label)
 
         # Preview label: shows the full resulting path
         self._preview_label = QLabel()

@@ -3,11 +3,12 @@ SettingsDialog — global application preferences.
 
 Two tabs:
     Git      : Read / write global user.name and user.email from ~/.gitconfig.
-    General  : Language selector (English / Italiano / Français / Español / Deutsch).
+    General  : Language selector + Theme selector (Dark / Light).
 
 Changes are applied when the user clicks OK:
   • Git fields   → written via ``git config --global``
   • Language     → stored in config.json; a restart is required to apply it.
+  • Theme        → stored in config.json AND applied live via QApplication.setStyleSheet().
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import subprocess
 
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -27,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.utils.app_settings import load_settings, save_settings
+from src.utils.styles import get_stylesheet
 
 # ── Supported languages ───────────────────────────────────────────────────────
 
@@ -36,6 +39,13 @@ _LANGUAGES: list[tuple[str, str]] = [
     ("Français",   "fr"),
     ("Español",    "es"),
     ("Deutsch",    "de"),
+]
+
+# ── Supported themes ──────────────────────────────────────────────────────────
+
+_THEMES: list[tuple[str, str]] = [
+    ("Dark  (Neon Terminal)",  "dark"),
+    ("Light (GitHub Light)",   "light"),
 ]
 
 
@@ -101,6 +111,18 @@ class SettingsDialog(QDialog):
         note_lang.setStyleSheet("color: #a6adc8; font-size: 11px;")
         gen_form.addRow(note_lang)
 
+        self._theme_combo = QComboBox()
+        for label, key in _THEMES:
+            self._theme_combo.addItem(label, key)
+        gen_form.addRow(QLabel(self.tr("Theme:")), self._theme_combo)
+
+        note_theme = QLabel(self.tr(
+            "The theme is applied immediately when you click OK."
+        ))
+        note_theme.setWordWrap(True)
+        note_theme.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        gen_form.addRow(note_theme)
+
         tabs.addTab(gen_tab, self.tr("General"))
 
         root.addWidget(tabs)
@@ -125,10 +147,16 @@ class SettingsDialog(QDialog):
                 self._lang_combo.setCurrentIndex(i)
                 break
 
+        current_theme = self._cfg.get("theme", "dark")
+        for i, (_, key) in enumerate(_THEMES):
+            if key == current_theme:
+                self._theme_combo.setCurrentIndex(i)
+                break
+
     # ── Slots ─────────────────────────────────────────────────────────
 
     def _on_accept(self) -> None:
-        """Write git config values and persist the language preference."""
+        """Write git config values and persist language + theme preferences."""
         name  = self._git_name.text().strip()
         email = self._git_email.text().strip()
 
@@ -138,7 +166,15 @@ class SettingsDialog(QDialog):
             self._set_git_global("user.email", email)
 
         self._cfg["language"] = self._lang_combo.currentData()
+        theme = self._theme_combo.currentData()
+        self._cfg["theme"] = theme
         save_settings(self._cfg)
+
+        # Apply the theme live — no restart needed
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(get_stylesheet(theme))
+
         self.accept()
 
     # ── Git config helpers ────────────────────────────────────────────

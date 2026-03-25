@@ -6,13 +6,14 @@ Settings file: ~/.config/ubuntu-gitgui/config.json
 Keys
 ────
     language  : str  — UI language code ("en" | "it"). Default: "en".
+    theme     : str  — UI colour theme ("dark" | "light"). Default: "dark".
 
 Usage::
 
     from src.utils.app_settings import load_settings, save_settings
 
     cfg = load_settings()
-    cfg["language"] = "it"
+    cfg["theme"] = "light"
     save_settings(cfg)
 """
 
@@ -30,6 +31,7 @@ _CONFIG_FILE = _CONFIG_DIR / "config.json"
 
 _DEFAULTS: dict[str, object] = {
     "language": "en",
+    "theme":    "dark",
 }
 
 
