@@ -267,6 +267,7 @@ class CommitGraphWidget(QWidget):
     checkout_hash_requested = pyqtSignal(str)   # payload: full commit hash
     commit_selected         = pyqtSignal(object) # payload: CommitData | None
     create_tag_requested    = pyqtSignal(str)   # payload: full commit hash
+    create_branch_requested = pyqtSignal(str)   # payload: full commit hash
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -411,6 +412,9 @@ class CommitGraphWidget(QWidget):
         create_tag_act = menu.addAction(
             get_icon("tag"), f"Create Tag Here…"
         )
+        create_branch_act = menu.addAction(
+            get_icon("branch"), "Create Branch Here…"
+        )
 
         chosen = menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -422,6 +426,8 @@ class CommitGraphWidget(QWidget):
             QApplication.clipboard().setText(full)
         elif chosen == create_tag_act:
             self.create_tag_requested.emit(full)
+        elif chosen == create_branch_act:
+            self.create_branch_requested.emit(full)
 
     # ── Private helpers ───────────────────────────────────────────────
 

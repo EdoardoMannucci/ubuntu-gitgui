@@ -37,7 +37,6 @@ Signals (always delivered on the main thread via queued connections):
 
 from __future__ import annotations
 
-import os
 import shlex
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -91,38 +90,32 @@ class _GitWorker(QObject):
     @pyqtSlot(_Op, object, object)
     def _execute(self, op: _Op, repo: git.Repo, auth: dict) -> None:
         auth_type = auth.get("type", "none")
-
-        # Snapshot env values we may temporarily overwrite
-        old_ssh     = os.environ.get("GIT_SSH_COMMAND")
-        old_askpass = os.environ.get("GIT_ASKPASS")
-        old_prompt  = os.environ.get("GIT_TERMINAL_PROMPT")
-
         askpass_ctx: AskPassScript | None = None
+        env_override: dict[str, str] = {}
 
         try:
             # ── Apply auth ─────────────────────────────────────────
             if auth_type == "ssh":
                 key = auth.get("key_path", "")
                 if key:
-                    os.environ["GIT_SSH_COMMAND"] = (
+                    env_override["GIT_SSH_COMMAND"] = (
                         f"ssh -i {shlex.quote(key)} -o IdentitiesOnly=yes"
                     )
-                elif old_ssh is not None:
-                    del os.environ["GIT_SSH_COMMAND"]
 
             elif auth_type == "https":
                 askpass_ctx = AskPassScript(auth["username"], auth["token"])
                 script_path = askpass_ctx.__enter__()
-                os.environ["GIT_ASKPASS"]         = script_path
-                os.environ["GIT_TERMINAL_PROMPT"] = "0"
+                env_override["GIT_ASKPASS"] = script_path
+                env_override["GIT_TERMINAL_PROMPT"] = "0"
 
             # ── Execute the git operation ──────────────────────────
-            if op is _Op.FETCH:
-                detail = self._fetch(repo)
-            elif op is _Op.PULL:
-                detail = self._pull(repo)
-            else:
-                detail = self._push(repo)
+            with repo.git.custom_environment(**env_override):
+                if op is _Op.FETCH:
+                    detail = self._fetch(repo)
+                elif op is _Op.PULL:
+                    detail = self._pull(repo)
+                else:
+                    detail = self._push(repo)
 
             self.finished.emit(op, detail)
 
@@ -133,24 +126,8 @@ class _GitWorker(QObject):
             self.failed.emit(op, str(exc))
 
         finally:
-            # ── Restore environment ────────────────────────────────
-            if auth_type == "ssh":
-                if old_ssh is not None:
-                    os.environ["GIT_SSH_COMMAND"] = old_ssh
-                elif "GIT_SSH_COMMAND" in os.environ:
-                    del os.environ["GIT_SSH_COMMAND"]
-
-            elif auth_type == "https":
-                if askpass_ctx is not None:
-                    askpass_ctx.__exit__(None, None, None)
-                for key, old_val in (
-                    ("GIT_ASKPASS",         old_askpass),
-                    ("GIT_TERMINAL_PROMPT", old_prompt),
-                ):
-                    if old_val is not None:
-                        os.environ[key] = old_val
-                    elif key in os.environ:
-                        del os.environ[key]
+            if askpass_ctx is not None:
+                askpass_ctx.__exit__(None, None, None)
 
     # ── Git operations ────────────────────────────────────────────────
 
@@ -170,16 +147,34 @@ class _GitWorker(QObject):
     def _pull(repo: git.Repo) -> str:
         if not repo.remotes:
             return "No remote configured."
-        output = repo.git.pull("--ff-only")
+        try:
+            branch = repo.active_branch
+        except TypeError as exc:
+            raise RuntimeError("Cannot pull while HEAD is detached.") from exc
+        upstream = branch.tracking_branch()
+        if upstream is None:
+            raise RuntimeError(
+                f"Branch '{branch.name}' has no upstream remote branch configured."
+            )
+        remote_name = upstream.remote_name
+        merge_target = upstream.remote_head
+        output = repo.git.pull("--ff-only", remote_name, merge_target)
         return output.splitlines()[0] if output else "Already up to date."
 
     @staticmethod
     def _push(repo: git.Repo) -> str:
         if not repo.remotes:
             return "No remote configured."
-        remote_name = repo.remotes[0].name
-        branch_name = repo.active_branch.name
-        output = repo.git.push("--set-upstream", remote_name, branch_name)
+        try:
+            branch = repo.active_branch
+        except TypeError as exc:
+            raise RuntimeError("Cannot push while HEAD is detached.") from exc
+        upstream = branch.tracking_branch()
+        if upstream is None:
+            raise RuntimeError(
+                f"Branch '{branch.name}' has no upstream remote branch configured."
+            )
+        output = repo.git.push(upstream.remote_name, f"{branch.name}:{upstream.remote_head}")
         return output.splitlines()[0] if output else "Pushed successfully."
 
 

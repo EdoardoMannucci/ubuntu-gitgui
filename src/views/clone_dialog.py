@@ -63,7 +63,7 @@ class CloneDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._ssh_key_path = ssh_key_path
-        self.setWindowTitle("Clone Repository")
+        self.setWindowTitle(self.tr("Clone Repository"))
         self.setModal(True)
         self.setMinimumWidth(480)
         self._build_ui()
@@ -81,21 +81,28 @@ class CloneDialog(QDialog):
 
         # URL field
         self._url_input = QLineEdit()
-        self._url_input.setPlaceholderText("https://github.com/user/repo.git  or  git@…")
+        self._url_input.setPlaceholderText(
+            self.tr("https://github.com/user/repo.git  or  git@…")
+        )
         self._url_input.textChanged.connect(self._update_preview)
-        form.addRow("Repository URL:", self._url_input)
+        form.addRow(self.tr("Repository URL:"), self._url_input)
 
         # Destination directory row
         dest_row = QHBoxLayout()
         self._dest_input = QLineEdit()
         self._dest_input.setPlaceholderText(str(Path.home()))
         self._dest_input.textChanged.connect(self._update_preview)
-        browse_btn = QPushButton("Browse…")
+        browse_btn = QPushButton(self.tr("Browse…"))
         browse_btn.setFixedWidth(80)
         browse_btn.clicked.connect(self._browse_destination)
         dest_row.addWidget(self._dest_input)
         dest_row.addWidget(browse_btn)
-        form.addRow("Clone into:", dest_row)
+        form.addRow(self.tr("Parent folder:"), dest_row)
+
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText(self.tr("Repository folder name"))
+        self._name_input.textChanged.connect(self._update_preview)
+        form.addRow(self.tr("Folder name:"), self._name_input)
 
         root.addLayout(form)
 
@@ -103,7 +110,7 @@ class CloneDialog(QDialog):
         if self._ssh_key_path:
             key_label = QLabel(
                 f"SSH key in use:  <code>{self._ssh_key_path}</code><br>"
-                "(from active identity profile)"
+                f"{self.tr('(from active identity profile)')}"
             )
             key_label.setWordWrap(True)
             key_label.setStyleSheet("color: #aba9be; font-size: 11px;")
@@ -119,7 +126,7 @@ class CloneDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Clone")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self.tr("Clone"))
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
@@ -131,7 +138,9 @@ class CloneDialog(QDialog):
     def _browse_destination(self) -> None:
         """Open a folder picker to select the parent directory."""
         start = self._dest_input.text().strip() or str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Select Destination Folder", start)
+        chosen = QFileDialog.getExistingDirectory(
+            self, self.tr("Select Destination Folder"), start
+        )
         if chosen:
             self._dest_input.setText(chosen)
 
@@ -141,23 +150,38 @@ class CloneDialog(QDialog):
         dest_dir = self._dest_input.text().strip() or str(Path.home())
 
         if url:
-            repo_name = _repo_name_from_url(url)
+            suggested_name = _repo_name_from_url(url)
+            if not self._name_input.text().strip():
+                self._name_input.blockSignals(True)
+                self._name_input.setText(suggested_name)
+                self._name_input.blockSignals(False)
+            repo_name = self._name_input.text().strip() or suggested_name
             full_path = str(Path(dest_dir) / repo_name)
-            self._preview_label.setText(f"Will clone into:  <code>{full_path}</code>")
+            self._preview_label.setText(
+                self.tr("Will clone into:  <code>{0}</code>").format(full_path)
+            )
         else:
             self._preview_label.setText("")
 
     def _on_accept(self) -> None:
         """Validate before closing."""
         if not self._url_input.text().strip():
-            QMessageBox.warning(self, "Validation", "Please enter a repository URL.")
+            QMessageBox.warning(
+                self, self.tr("Validation"), self.tr("Please enter a repository URL.")
+            )
             return
         dest = self._dest_input.text().strip() or str(Path.home())
         if not Path(dest).is_dir():
             QMessageBox.warning(
                 self,
-                "Validation",
-                f"The destination directory does not exist:\n{dest}",
+                self.tr("Validation"),
+                self.tr("The destination directory does not exist:\n{0}").format(dest),
+            )
+            return
+        repo_name = self._name_input.text().strip()
+        if not repo_name:
+            QMessageBox.warning(
+                self, self.tr("Validation"), self.tr("Please enter a folder name.")
             )
             return
         self.accept()
@@ -173,5 +197,5 @@ class CloneDialog(QDialog):
     def clone_destination(self) -> str:
         """The full computed destination path (parent_dir/repo_name)."""
         dest_dir = self._dest_input.text().strip() or str(Path.home())
-        repo_name = _repo_name_from_url(self.clone_url)
+        repo_name = self._name_input.text().strip() or _repo_name_from_url(self.clone_url)
         return str(Path(dest_dir) / repo_name)

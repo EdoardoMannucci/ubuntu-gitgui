@@ -160,10 +160,8 @@ class SettingsDialog(QDialog):
         name  = self._git_name.text().strip()
         email = self._git_email.text().strip()
 
-        if name:
-            self._set_git_global("user.name", name)
-        if email:
-            self._set_git_global("user.email", email)
+        self._set_git_global("user.name", name)
+        self._set_git_global("user.email", email)
 
         self._cfg["language"] = self._lang_combo.currentData()
         theme = self._theme_combo.currentData()
@@ -193,12 +191,13 @@ class SettingsDialog(QDialog):
 
     @staticmethod
     def _set_git_global(key: str, value: str) -> None:
-        """Write a value to the global git config. Silently ignores errors."""
+        """Write or unset a value in the global git config."""
         try:
-            subprocess.run(
-                ["git", "config", "--global", key, value],
-                capture_output=True, text=True, timeout=5,
-                check=False,
+            args = (
+                ["git", "config", "--global", key, value]
+                if value
+                else ["git", "config", "--global", "--unset-all", key]
             )
+            subprocess.run(args, capture_output=True, text=True, timeout=5, check=False)
         except (OSError, subprocess.TimeoutExpired):
             pass

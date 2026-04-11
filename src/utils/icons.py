@@ -36,6 +36,8 @@ _MAP: dict[str, tuple[str, str]] = {
     "fetch":      ("fa6s.rotate",                  _PRIMARY),
     "pull":       ("fa6s.arrow-down",              _PRIMARY),
     "push":       ("fa6s.arrow-up",                _PRIMARY),
+    "undo":       ("fa6s.rotate-left",             _MUTED),
+    "redo":       ("fa6s.rotate-right",            _MUTED),
     "branch":     ("fa6s.code-branch",             _TEXT),
     "stash":      ("fa6s.layer-group",             _MUTED),
     "pop":        ("fa6s.box-open",                _MUTED),

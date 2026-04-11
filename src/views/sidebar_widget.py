@@ -41,6 +41,7 @@ from src.utils.icons import icon as get_icon
 _SECTION_LOCAL = "Local Branches"
 _SECTION_REMOTE = "Remote Branches"
 _SECTION_TAGS = "Tags"
+_SECTION_SUBMODULES = "Submodules"
 
 # Unicode check mark shown next to the active branch
 _ACTIVE_MARKER = "✔ "
@@ -64,6 +65,7 @@ class SidebarWidget(QTreeWidget):
     rename_branch_requested    = pyqtSignal(str, str) # (old_name, new_name)
     delete_tag_requested       = pyqtSignal(str)      # tag name
     push_tag_requested         = pyqtSignal(str)      # tag name
+    create_branch_from_tag_requested = pyqtSignal(str, str)  # (tag name, branch name)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -100,6 +102,7 @@ class SidebarWidget(QTreeWidget):
         local_branches: list[str],
         remote_branches: list[str],
         tags: list[str],
+        submodules: list[str],
         active_branch: str,
     ) -> None:
         """Rebuild the entire tree from the provided ref lists.
@@ -121,6 +124,7 @@ class SidebarWidget(QTreeWidget):
         self._add_section(_SECTION_LOCAL, local_branches, is_local=True)
         self._add_section(_SECTION_REMOTE, remote_branches, is_local=False)
         self._add_section(_SECTION_TAGS, tags, is_local=False)
+        self._add_section(_SECTION_SUBMODULES, submodules, is_local=False)
 
     def refresh_active_branch(self, new_branch: str) -> None:
         """Update the visual highlight after a checkout without a full repopulate.
@@ -393,6 +397,8 @@ class SidebarWidget(QTreeWidget):
             get_icon("checkout"), f"Checkout '{tag_name}' (detached HEAD)"
         )
         menu.addSeparator()
+        branch_act = menu.addAction(get_icon("branch"), f"Create Branch From '{tag_name}'…")
+        menu.addSeparator()
         push_act = menu.addAction(get_icon("push"), f"Push Tag to Remote…")
         menu.addSeparator()
         delete_act = menu.addAction(get_icon("delete"), f"Delete Tag…")
@@ -401,6 +407,16 @@ class SidebarWidget(QTreeWidget):
 
         if chosen == checkout_act:
             self.checkout_tag_requested.emit(tag_name)
+
+        elif chosen == branch_act:
+            branch_name, ok = QInputDialog.getText(
+                self,
+                "Create Branch From Tag",
+                f"New branch name for tag <b>{tag_name}</b>:",
+                text=tag_name,
+            )
+            if ok and branch_name.strip():
+                self.create_branch_from_tag_requested.emit(tag_name, branch_name.strip())
 
         elif chosen == push_act:
             self.push_tag_requested.emit(tag_name)

@@ -21,15 +21,90 @@ Usage (from MainWindow):
     self._repo_ctrl.open_repo("/path/to/my/project")
 """
 
-import os
 import shlex
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import git
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from src.models.commit_graph import CommitData
+
+
+class BranchState(str, Enum):
+    """High-level repository HEAD state used by the UI."""
+
+    NO_REPO = "no_repo"
+    DETACHED = "detached"
+    NO_REMOTE = "no_remote"
+    NO_UPSTREAM = "no_upstream"
+    READY = "ready"
+
+
+@dataclass(frozen=True)
+class RepositoryState:
+    """Snapshot of the currently opened repository state for UI decisions."""
+
+    branch_state: BranchState
+    branch_name: str = ""
+    display_name: str = ""
+    remote_names: tuple[str, ...] = ()
+    upstream_name: str = ""
+
+    @property
+    def can_pull(self) -> bool:
+        return self.branch_state == BranchState.READY
+
+    @property
+    def can_push(self) -> bool:
+        return self.branch_state == BranchState.READY
+
+    @property
+    def is_detached(self) -> bool:
+        return self.branch_state == BranchState.DETACHED
+
+
+class _CloneWorker(QObject):
+    """Runs a clone operation on a dedicated thread."""
+
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    @pyqtSlot(str, str, str, str, str)
+    def clone(
+        self,
+        url: str,
+        destination: str,
+        ssh_key_path: str,
+        https_username: str,
+        https_token: str,
+    ) -> None:
+        from src.utils.credentials import AskPassScript
+
+        try:
+            env: dict[str, str] = {}
+            if ssh_key_path:
+                env["GIT_SSH_COMMAND"] = (
+                    f"ssh -i {shlex.quote(ssh_key_path)} -o IdentitiesOnly=yes"
+                )
+
+            if https_username and https_token:
+                askpass = AskPassScript(https_username, https_token)
+                script_path = askpass.__enter__()
+                try:
+                    env["GIT_ASKPASS"] = script_path
+                    env["GIT_TERMINAL_PROMPT"] = "0"
+                    repo = git.Repo.clone_from(url, destination, env=env)
+                finally:
+                    askpass.__exit__(None, None, None)
+            else:
+                repo = git.Repo.clone_from(url, destination, env=env if env else None)
+            self.finished.emit(repo)
+        except git.GitCommandError as exc:
+            self.failed.emit(exc.stderr.strip() if exc.stderr else str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
 
 
 class RepositoryController(QObject):
@@ -43,10 +118,29 @@ class RepositoryController(QObject):
     repo_closed = pyqtSignal()
     branch_changed = pyqtSignal(str)  # payload: new branch name (or commit hash if detached)
     refs_updated = pyqtSignal()       # branch list or tag list changed
+    state_changed = pyqtSignal(object)  # payload: RepositoryState
+    clone_started = pyqtSignal(str, str)  # (url, destination)
+    clone_finished = pyqtSignal(str)  # repo path
+    clone_failed = pyqtSignal(str)
+    _request_clone = pyqtSignal(str, str, str, str, str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._repo: git.Repo | None = None
+        self._clone_thread = QThread(self)
+        self._clone_worker = _CloneWorker()
+        self._clone_worker.moveToThread(self._clone_thread)
+        self._request_clone.connect(self._clone_worker.clone)
+        self._clone_worker.finished.connect(self._on_clone_finished)
+        self._clone_worker.failed.connect(self._on_clone_failed)
+        self._clone_thread.start()
+        self.destroyed.connect(self._shutdown_thread)
+        self._undo_stack: list[str] = []
+        self._redo_stack: list[str] = []
+
+    def _shutdown_thread(self) -> None:
+        self._clone_thread.quit()
+        self._clone_thread.wait(3000)
 
     # ── Public properties ─────────────────────────────────────────────
 
@@ -85,6 +179,59 @@ class RepositoryController(QObject):
             # Detached HEAD — return the short SHA instead
             return self._repo.head.commit.hexsha[:7]
 
+    @property
+    def state(self) -> RepositoryState:
+        """Return a high-level repository state snapshot for the UI."""
+        if self._repo is None:
+            return RepositoryState(branch_state=BranchState.NO_REPO)
+
+        remote_names = tuple(remote.name for remote in self._repo.remotes)
+        try:
+            branch = self._repo.active_branch
+            upstream = branch.tracking_branch()
+            upstream_name = upstream.name if upstream is not None else ""
+            branch_state = (
+                BranchState.NO_REMOTE
+                if not remote_names
+                else BranchState.NO_UPSTREAM
+                if upstream is None
+                else BranchState.READY
+            )
+            return RepositoryState(
+                branch_state=branch_state,
+                branch_name=branch.name,
+                display_name=branch.name,
+                remote_names=remote_names,
+                upstream_name=upstream_name,
+            )
+        except TypeError:
+            short_hash = self._repo.head.commit.hexsha[:7]
+            return RepositoryState(
+                branch_state=BranchState.DETACHED,
+                branch_name=short_hash,
+                display_name=f"HEAD ({short_hash})",
+                remote_names=remote_names,
+            )
+
+    def remote_names(self) -> list[str]:
+        if self._repo is None:
+            return []
+        return [remote.name for remote in self._repo.remotes]
+
+    def submodules(self) -> list[str]:
+        if self._repo is None:
+            return []
+        try:
+            return sorted(submodule.name for submodule in self._repo.submodules)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def can_undo_navigation(self) -> bool:
+        return bool(self._undo_stack)
+
+    def can_redo_navigation(self) -> bool:
+        return bool(self._redo_stack)
+
     # ── Repository lifecycle ──────────────────────────────────────────
 
     def open_repo(self, path: str) -> None:
@@ -95,7 +242,10 @@ class RepositoryController(QObject):
             git.NoSuchPathError: if *path* does not exist.
         """
         self._repo = git.Repo(path, search_parent_directories=True)
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         self.repo_opened.emit(str(self._repo.working_tree_dir))
+        self.state_changed.emit(self.state)
 
     def init_repo(self, path: str) -> None:
         """Initialise a brand-new repository at *path* and open it.
@@ -104,9 +254,12 @@ class RepositoryController(QObject):
         """
         Path(path).mkdir(parents=True, exist_ok=True)
         self._repo = git.Repo.init(path)
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         self.repo_opened.emit(str(self._repo.working_tree_dir))
+        self.state_changed.emit(self.state)
 
-    def clone_repo(
+    def start_clone(
         self,
         url: str,
         destination: str,
@@ -114,64 +267,35 @@ class RepositoryController(QObject):
         https_username: str = "",
         https_token: str = "",
     ) -> None:
-        """Clone *url* into *destination* and open the result.
-
-        This is a blocking operation. The caller should show a busy cursor
-        (handled in MainWindow) to give the user feedback.
-
-        Authentication is injected via environment variables only — credentials
-        are never embedded in the URL or written to .git/config:
-          - SSH:   ``GIT_SSH_COMMAND`` pointing to the private key.
-          - HTTPS: A temporary ``GIT_ASKPASS`` script (mode 700) that echoes
-                   the username / token; deleted immediately after clone.
-
-        Args:
-            url:            Remote URL (HTTPS or SSH).
-            destination:    Local path where the repository will be created.
-            ssh_key_path:   Path to SSH private key (SSH auth).
-            https_username: HTTPS username (HTTPS auth).
-            https_token:    Personal Access Token or password (HTTPS auth).
-
-        Raises:
-            git.GitCommandError: on network failure, invalid URL, etc.
-        """
-        from src.utils.credentials import AskPassScript
-
-        QApplication.setOverrideCursor(
-            __import__("PyQt6.QtCore", fromlist=["Qt"]).Qt.CursorShape.WaitCursor
+        """Clone *url* into *destination* asynchronously."""
+        self.clone_started.emit(url, destination)
+        self._request_clone.emit(
+            url, destination, ssh_key_path, https_username, https_token
         )
-        try:
-            env: dict[str, str] = {}
-
-            if ssh_key_path:
-                env["GIT_SSH_COMMAND"] = (
-                    f"ssh -i {shlex.quote(ssh_key_path)} -o IdentitiesOnly=yes"
-                )
-
-            if https_username and https_token:
-                askpass = AskPassScript(https_username, https_token)
-                script_path = askpass.__enter__()
-                try:
-                    env["GIT_ASKPASS"]         = script_path
-                    env["GIT_TERMINAL_PROMPT"] = "0"
-                    self._repo = git.Repo.clone_from(url, destination, env=env)
-                finally:
-                    askpass.__exit__(None, None, None)
-            else:
-                self._repo = git.Repo.clone_from(
-                    url, destination, env=env if env else None
-                )
-
-            self.repo_opened.emit(str(self._repo.working_tree_dir))
-        finally:
-            QApplication.restoreOverrideCursor()
 
     def close_repo(self) -> None:
         """Unload the current repository."""
         if self._repo is not None:
             self._repo.close()
             self._repo = None
+            self._undo_stack.clear()
+            self._redo_stack.clear()
             self.repo_closed.emit()
+            self.state_changed.emit(self.state)
+
+    @pyqtSlot(object)
+    def _on_clone_finished(self, repo: git.Repo) -> None:
+        self._repo = repo
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        repo_path = str(self._repo.working_tree_dir)
+        self.repo_opened.emit(repo_path)
+        self.state_changed.emit(self.state)
+        self.clone_finished.emit(repo_path)
+
+    @pyqtSlot(str)
+    def _on_clone_failed(self, message: str) -> None:
+        self.clone_failed.emit(message)
 
     # ── Branch and tag data ───────────────────────────────────────────
 
@@ -254,6 +378,7 @@ class RepositoryController(QObject):
             raise RuntimeError("No repository open.")
         self._repo.git.merge(source_branch)
         self.branch_changed.emit(self.current_branch_name)
+        self.state_changed.emit(self.state)
 
     # ── Checkout ─────────────────────────────────────────────────────
 
@@ -275,8 +400,10 @@ class RepositoryController(QObject):
         if self.current_branch_name == branch_name:
             return
 
+        self._remember_navigation_origin()
         self._repo.git.checkout(branch_name)
         self.branch_changed.emit(branch_name)
+        self.state_changed.emit(self.state)
 
     def checkout_tag(self, tag_name: str) -> None:
         """Checkout a tag, entering detached HEAD state.
@@ -290,9 +417,20 @@ class RepositoryController(QObject):
         """
         if self._repo is None:
             raise RuntimeError("No repository open.")
+        self._remember_navigation_origin()
         self._repo.git.checkout(tag_name)
         short_hash = self._repo.head.commit.hexsha[:7]
         self.branch_changed.emit(f"HEAD ({short_hash})")
+        self.state_changed.emit(self.state)
+
+    def checkout_commit(self, full_hash: str) -> None:
+        """Checkout a commit in detached HEAD state."""
+        if self._repo is None:
+            raise RuntimeError("No repository open.")
+        self._remember_navigation_origin()
+        self._repo.git.checkout(full_hash)
+        self.branch_changed.emit(f"HEAD ({full_hash[:7]})")
+        self.state_changed.emit(self.state)
 
     def checkout_remote_branch(self, remote_ref: str) -> str:
         """Create a local tracking branch from *remote_ref* and check it out.
@@ -324,13 +462,56 @@ class RepositoryController(QObject):
         if local_name in existing_names:
             # Local branch already exists — just switch to it
             if self.current_branch_name != local_name:
+                self._remember_navigation_origin()
                 self._repo.git.checkout(local_name)
         else:
             # Create a new local branch tracking the remote ref
+            self._remember_navigation_origin()
             self._repo.git.checkout("-b", local_name, "--track", remote_ref)
 
         self.branch_changed.emit(local_name)
+        self.state_changed.emit(self.state)
         return local_name
+
+    def create_branch_at_ref(self, name: str, ref: str) -> None:
+        """Create and checkout a new branch at the given ref."""
+        if self._repo is None:
+            raise RuntimeError("No repository open.")
+        self._remember_navigation_origin()
+        self._repo.git.checkout("-b", name.strip(), ref)
+        self.refs_updated.emit()
+        self.branch_changed.emit(name.strip())
+        self.state_changed.emit(self.state)
+
+    def undo_navigation(self) -> str:
+        """Checkout the previous navigation target recorded in this session."""
+        if self._repo is None:
+            raise RuntimeError("No repository open.")
+        if not self._undo_stack:
+            raise RuntimeError("Nothing to undo.")
+        current = self._current_ref()
+        target = self._undo_stack.pop()
+        if current:
+            self._redo_stack.append(current)
+        self._repo.git.checkout(target)
+        self.branch_changed.emit(self.state.display_name)
+        self.state_changed.emit(self.state)
+        return self.state.display_name
+
+    def redo_navigation(self) -> str:
+        """Re-apply the most recently undone navigation target."""
+        if self._repo is None:
+            raise RuntimeError("No repository open.")
+        if not self._redo_stack:
+            raise RuntimeError("Nothing to redo.")
+        current = self._current_ref()
+        target = self._redo_stack.pop()
+        if current:
+            self._undo_stack.append(current)
+        self._repo.git.checkout(target)
+        self.branch_changed.emit(self.state.display_name)
+        self.state_changed.emit(self.state)
+        return self.state.display_name
 
     # ── Tag management ────────────────────────────────────────────────
 
@@ -392,6 +573,7 @@ class RepositoryController(QObject):
     def push_tag(
         self,
         name: str,
+        remote_name: str = "",
         ssh_key_path: str = "",
         https_username: str = "",
         https_token: str = "",
@@ -420,7 +602,7 @@ class RepositoryController(QObject):
         if not self._repo.remotes:
             raise RuntimeError("No remote configured.")
 
-        remote = self._repo.remotes[0].name
+        remote = remote_name or self._repo.remotes[0].name
 
         if https_username and https_token:
             askpass = AskPassScript(https_username, https_token)
@@ -442,3 +624,18 @@ class RepositoryController(QObject):
             env_override = {"GIT_SSH_COMMAND": ssh_cmd} if ssh_cmd else {}
             with self._repo.git.custom_environment(**env_override):
                 self._repo.git.push(remote, f"refs/tags/{name}")
+
+    def _current_ref(self) -> str:
+        if self._repo is None:
+            return ""
+        try:
+            return self._repo.active_branch.name
+        except TypeError:
+            return self._repo.head.commit.hexsha
+
+    def _remember_navigation_origin(self) -> None:
+        current = self._current_ref()
+        if current:
+            if not self._undo_stack or self._undo_stack[-1] != current:
+                self._undo_stack.append(current)
+            self._redo_stack.clear()

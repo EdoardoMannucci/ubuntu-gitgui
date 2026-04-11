@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.controllers.profile_controller import ProfileController
-from src.controllers.repository_controller import RepositoryController
+from src.controllers.repository_controller import BranchState, RepositoryController
 from src.controllers.staging_controller import StagingController
 from src.controllers.toolbar_controller import ToolbarController
 from src.models.profile import Profile
@@ -90,6 +90,10 @@ class MainWindow(QMainWindow):
         self._repo_ctrl.repo_closed.connect(self._on_repo_closed)
         self._repo_ctrl.branch_changed.connect(self._on_branch_changed)
         self._repo_ctrl.refs_updated.connect(self._on_refs_updated)
+        self._repo_ctrl.state_changed.connect(self._on_repo_state_changed)
+        self._repo_ctrl.clone_started.connect(self._on_clone_started)
+        self._repo_ctrl.clone_finished.connect(self._on_clone_finished)
+        self._repo_ctrl.clone_failed.connect(self._on_clone_failed)
 
         self._staging_ctrl = StagingController(parent=self)
         self._staging_ctrl.status_changed.connect(self._check_conflict_state)
@@ -101,6 +105,8 @@ class MainWindow(QMainWindow):
         self._toolbar_ctrl.operation_failed.connect(self._on_toolbar_failed)
         self._toolbar_ctrl.refs_changed.connect(self._on_toolbar_refs_changed)
         self._toolbar_ctrl.working_tree_changed.connect(self._on_toolbar_working_tree_changed)
+
+        self._clone_in_progress = False
 
         self._setup_window()
         self._build_menu_bar()
@@ -274,6 +280,18 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        self._action_undo_nav = QAction(get_icon("undo"), self.tr("Undo"), self)
+        self._action_undo_nav.setToolTip(self.tr("Go back to the previous checked out ref"))
+        self._action_undo_nav.triggered.connect(self._action_undo_navigation)
+        toolbar.addAction(self._action_undo_nav)
+
+        self._action_redo_nav = QAction(get_icon("redo"), self.tr("Redo"), self)
+        self._action_redo_nav.setToolTip(self.tr("Restore the most recently undone checkout"))
+        self._action_redo_nav.triggered.connect(self._action_redo_navigation)
+        toolbar.addAction(self._action_redo_nav)
+
+        toolbar.addSeparator()
+
         # ── Local operations (sync) ────────────────────────────────
         self._action_branch = QAction(get_icon("branch"), self.tr("Branch"), self)
         self._action_branch.setToolTip(self.tr("Create a new branch at HEAD"))
@@ -305,6 +323,8 @@ class MainWindow(QMainWindow):
             self._action_fetch,
             self._action_pull,
             self._action_push,
+            self._action_undo_nav,
+            self._action_redo_nav,
             self._action_branch,
             self._action_stash,
             self._action_pop,
@@ -327,6 +347,9 @@ class MainWindow(QMainWindow):
         self._sidebar.rename_branch_requested.connect(self._on_rename_branch)
         self._sidebar.delete_tag_requested.connect(self._on_delete_tag)
         self._sidebar.push_tag_requested.connect(self._on_push_tag)
+        self._sidebar.create_branch_from_tag_requested.connect(
+            self._on_create_branch_from_tag
+        )
         outer_splitter.addWidget(self._sidebar)
 
         # Center: vertical splitter — commit graph (top) + inspector (bottom)
@@ -337,6 +360,9 @@ class MainWindow(QMainWindow):
         self._graph_widget.checkout_hash_requested.connect(self._on_checkout_hash)
         self._graph_widget.commit_selected.connect(self._on_commit_selected)
         self._graph_widget.create_tag_requested.connect(self._on_create_tag)
+        self._graph_widget.create_branch_requested.connect(
+            self._on_create_branch_from_commit
+        )
         center_splitter.addWidget(self._graph_widget)
 
         self._commit_inspector = CommitInspectorWidget()
@@ -481,32 +507,13 @@ class MainWindow(QMainWindow):
         url  = dialog.clone_url
         dest = dialog.clone_destination
 
-        # Show busy feedback while the blocking clone runs
-        self._set_toolbar_enabled(False)
-        self.statusBar().showMessage(f"Cloning {url} \u2026")
-        QApplication.processEvents()
-
-        try:
-            self._repo_ctrl.clone_repo(
-                url, dest,
-                ssh_key_path=ssh_key,
-                https_username=https_username,
-                https_token=https_token,
-            )
-        except git.GitCommandError as exc:
-            stderr = getattr(exc, "stderr", "") or str(exc)
-            QMessageBox.critical(
-                self,
-                "Clone Failed",
-                f"Git reported an error while cloning:\n\n{stderr.strip()}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Clone Failed", str(exc))
-        finally:
-            self._set_toolbar_enabled(self._repo_ctrl.is_open)
-            self.statusBar().showMessage(
-                self._repo_ctrl.repo_path if self._repo_ctrl.is_open else "No repository open"
-            )
+        self._repo_ctrl.start_clone(
+            url,
+            dest,
+            ssh_key_path=ssh_key,
+            https_username=https_username,
+            https_token=https_token,
+        )
 
     # ── Repository signal handlers ────────────────────────────────────
 
@@ -544,6 +551,7 @@ class MainWindow(QMainWindow):
                 pass
         # Always sync profile (including auth credentials) to toolbar controller
         self._toolbar_ctrl.set_profile(active)
+        self._refresh_action_states()
 
     def _on_repo_closed(self) -> None:
         """Triggered by RepositoryController.repo_closed."""
@@ -557,6 +565,34 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self._repo_status_label.setText("No repository open")
         self._branch_status_label.hide()
+        self._refresh_action_states()
+
+    def _on_clone_started(self, url: str, destination: str) -> None:
+        self._clone_in_progress = True
+        self._set_toolbar_enabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.statusBar().showMessage(
+            self.tr("Cloning {0} into {1}…").format(url, destination)
+        )
+
+    def _on_clone_finished(self, repo_path: str) -> None:
+        self._clone_in_progress = False
+        QApplication.restoreOverrideCursor()
+        self.statusBar().showMessage(repo_path)
+        self._refresh_action_states()
+
+    def _on_clone_failed(self, error: str) -> None:
+        self._clone_in_progress = False
+        QApplication.restoreOverrideCursor()
+        self.statusBar().showMessage(
+            self._repo_ctrl.repo_path if self._repo_ctrl.is_open else self.tr("No repository open")
+        )
+        self._refresh_action_states()
+        QMessageBox.critical(self, self.tr("Clone Failed"), error)
+
+    def _on_repo_state_changed(self, _state) -> None:
+        self._update_repo_status_label()
+        self._refresh_action_states()
 
     def _on_branch_changed(self, branch_name: str) -> None:
         """Triggered after a successful checkout or merge."""
@@ -744,7 +780,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            self._repo_ctrl.repo.git.checkout(full_hash)
+            self._repo_ctrl.checkout_commit(full_hash)
             self._populate_sidebar()
             self._update_window_title()
             self._update_repo_status_label()
@@ -999,7 +1035,7 @@ class MainWindow(QMainWindow):
     def _action_create_branch(self) -> None:
         """Branch toolbar button: prompt for a name and create a new branch."""
         name, ok = QInputDialog.getText(
-            self, "New Branch", "Branch name:", text=""
+            self, self.tr("New Branch"), self.tr("Branch name:"), text=""
         )
         if not ok or not name.strip():
             return
@@ -1011,6 +1047,42 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self, "Branch Failed",
                 f"<pre>{exc.stderr.strip()}</pre>" if exc.stderr else str(exc),
+            )
+
+    def _action_undo_navigation(self) -> None:
+        try:
+            label = self._repo_ctrl.undo_navigation()
+            self._populate_sidebar()
+            self._reload_graph()
+            self._staging_ctrl.status_changed.emit()
+            self.statusBar().showMessage(
+                self.tr("Checked out previous location: {0}").format(label)
+            )
+        except RuntimeError as exc:
+            QMessageBox.warning(self, self.tr("Undo"), str(exc))
+        except git.GitCommandError as exc:
+            QMessageBox.critical(
+                self,
+                self.tr("Undo Failed"),
+                f"<pre>{exc.stderr.strip() if exc.stderr else str(exc)}</pre>",
+            )
+
+    def _action_redo_navigation(self) -> None:
+        try:
+            label = self._repo_ctrl.redo_navigation()
+            self._populate_sidebar()
+            self._reload_graph()
+            self._staging_ctrl.status_changed.emit()
+            self.statusBar().showMessage(
+                self.tr("Re-applied checkout: {0}").format(label)
+            )
+        except RuntimeError as exc:
+            QMessageBox.warning(self, self.tr("Redo"), str(exc))
+        except git.GitCommandError as exc:
+            QMessageBox.critical(
+                self,
+                self.tr("Redo Failed"),
+                f"<pre>{exc.stderr.strip() if exc.stderr else str(exc)}</pre>",
             )
 
     def _action_stash_changes(self) -> None:
@@ -1041,8 +1113,11 @@ class MainWindow(QMainWindow):
 
     def _set_toolbar_enabled(self, enabled: bool) -> None:
         """Enable or disable all git toolbar actions."""
+        if enabled:
+            self._refresh_action_states()
+            return
         for action in self._git_actions:
-            action.setEnabled(enabled)
+            action.setEnabled(False)
 
     def _on_toolbar_started(self, op_name: str) -> None:
         """Disable toolbar and show a wait cursor while a network op runs."""
@@ -1053,14 +1128,14 @@ class MainWindow(QMainWindow):
     def _on_toolbar_finished(self, op_name: str, detail: str) -> None:
         """Re-enable toolbar and show a success message."""
         QApplication.restoreOverrideCursor()
-        self._set_toolbar_enabled(self._repo_ctrl.is_open)
+        self._refresh_action_states()
         self._update_repo_status_label()
         QMessageBox.information(self, op_name, detail or f"{op_name} completed.")
 
     def _on_toolbar_failed(self, op_name: str, error: str) -> None:
         """Re-enable toolbar and show an error message."""
         QApplication.restoreOverrideCursor()
-        self._set_toolbar_enabled(self._repo_ctrl.is_open)
+        self._refresh_action_states()
         self._update_repo_status_label()
         QMessageBox.critical(self, f"{op_name} Failed", error)
 
@@ -1197,7 +1272,7 @@ class MainWindow(QMainWindow):
     def _on_checkout_tag_requested(self, tag_name: str) -> None:
         """Sidebar double-click or context menu → checkout a tag (detached HEAD)."""
         reply = QMessageBox.warning(
-            self, "Checkout Tag",
+            self, self.tr("Checkout Tag"),
             f"Checking out tag <b>{tag_name}</b> will put the repository in "
             "<b>detached HEAD</b> state.<br><br>"
             "You will not be on any branch. Any commits you make will not belong "
@@ -1209,20 +1284,21 @@ class MainWindow(QMainWindow):
         try:
             self._repo_ctrl.checkout_tag(tag_name)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Checkout Failed", str(exc))
+            QMessageBox.critical(self, self.tr("Checkout Failed"), str(exc))
 
     def _on_create_tag(self, full_hash: str) -> None:
         """CommitGraphWidget.create_tag_requested → show dialog and create tag."""
         name, ok = QInputDialog.getText(
-            self, "Create Tag", "Tag name (e.g. v1.0.0):"
+            self, self.tr("Create Tag"), self.tr("Tag name (e.g. v1.0.0):")
         )
         if not ok or not name.strip():
             return
         name = name.strip()
 
         message, ok2 = QInputDialog.getText(
-            self, "Tag Message",
-            "Annotation message (leave empty for a lightweight tag):"
+            self,
+            self.tr("Tag Message"),
+            self.tr("Annotation message (leave empty for a lightweight tag):"),
         )
         message = message.strip() if ok2 else ""
 
@@ -1231,7 +1307,7 @@ class MainWindow(QMainWindow):
             self._populate_sidebar()
             self._reload_graph_with_tags()
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Create Tag Failed", str(exc))
+            QMessageBox.critical(self, self.tr("Create Tag Failed"), str(exc))
 
     def _on_delete_tag(self, tag_name: str) -> None:
         """Sidebar delete_tag_requested → delete local tag."""
@@ -1240,20 +1316,79 @@ class MainWindow(QMainWindow):
             self._populate_sidebar()
             self._reload_graph_with_tags()
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Delete Tag Failed", str(exc))
+            QMessageBox.critical(self, self.tr("Delete Tag Failed"), str(exc))
 
     def _on_push_tag(self, tag_name: str) -> None:
-        """Sidebar push_tag_requested → push tag to remote with SSH key."""
+        """Sidebar push_tag_requested → push tag to a selected remote."""
+        if not self._repo_ctrl.is_open:
+            return
+        remote_names = self._repo_ctrl.remote_names()
+        if not remote_names:
+            QMessageBox.warning(self, self.tr("No Remote"), self.tr("This repository has no configured remotes."))
+            return
+        remote_name = remote_names[0]
+        if len(remote_names) > 1:
+            chosen, ok = QInputDialog.getItem(
+                self,
+                self.tr("Push Tag"),
+                self.tr("Remote:"),
+                remote_names,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            remote_name = chosen
         active = self._profile_ctrl.active_profile
-        ssh_key = (active.ssh_key_path or "") if active else ""
+        from src.utils.credentials import AuthMethod, get_token
+
+        ssh_key = ""
+        https_username = ""
+        https_token = ""
+        if active:
+            if active.auth_method == AuthMethod.HTTPS:
+                https_username = active.https_username
+                https_token = get_token(https_username)
+            elif active.auth_method == AuthMethod.SSH:
+                ssh_key = active.ssh_key_path or ""
         try:
-            self._repo_ctrl.push_tag(tag_name, ssh_key_path=ssh_key)
+            self._repo_ctrl.push_tag(
+                tag_name,
+                remote_name=remote_name,
+                ssh_key_path=ssh_key,
+                https_username=https_username,
+                https_token=https_token,
+            )
             QMessageBox.information(
-                self, "Push Tag",
-                f"Tag <b>{tag_name}</b> successfully pushed to remote."
+                self,
+                self.tr("Push Tag"),
+                self.tr("Tag <b>{0}</b> successfully pushed to <b>{1}</b>.").format(
+                    tag_name, remote_name
+                ),
             )
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Push Tag Failed", str(exc))
+            QMessageBox.critical(self, self.tr("Push Tag Failed"), str(exc))
+
+    def _on_create_branch_from_commit(self, full_hash: str) -> None:
+        name, ok = QInputDialog.getText(
+            self, self.tr("Create Branch"), self.tr("New branch name:"), text=""
+        )
+        if not ok or not name.strip():
+            return
+        try:
+            self._repo_ctrl.create_branch_at_ref(name.strip(), full_hash)
+            self._populate_sidebar()
+            self._reload_graph()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self.tr("Create Branch Failed"), str(exc))
+
+    def _on_create_branch_from_tag(self, tag_name: str, branch_name: str) -> None:
+        try:
+            self._repo_ctrl.create_branch_at_ref(branch_name, tag_name)
+            self._populate_sidebar()
+            self._reload_graph()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self.tr("Create Branch Failed"), str(exc))
 
     def _reload_graph_with_tags(self) -> None:
         """Reload the commit graph keeping tag badges up to date."""
@@ -1281,6 +1416,7 @@ class MainWindow(QMainWindow):
             local_branches=ctrl.local_branches(),
             remote_branches=ctrl.remote_branches(),
             tags=ctrl.tags(),
+            submodules=ctrl.submodules(),
             active_branch=ctrl.current_branch_name,
         )
 
@@ -1292,12 +1428,22 @@ class MainWindow(QMainWindow):
 
     def _update_repo_status_label(self) -> None:
         if self._repo_ctrl.is_open:
-            branch = self._repo_ctrl.current_branch_name
+            state = self._repo_ctrl.state
             self._repo_status_label.setText(self._repo_ctrl.repo_path)
-            self._branch_status_label.setText(f"   ⎇  {branch}")
+            suffix = ""
+            if state.branch_state == BranchState.DETACHED:
+                suffix = self.tr("detached HEAD")
+            elif state.branch_state == BranchState.NO_REMOTE:
+                suffix = self.tr("no remote")
+            elif state.branch_state == BranchState.NO_UPSTREAM:
+                suffix = self.tr("no upstream")
+            elif state.upstream_name:
+                suffix = state.upstream_name
+            label = state.display_name or self._repo_ctrl.current_branch_name
+            self._branch_status_label.setText(f"   ⎇  {label}" + (f"  ·  {suffix}" if suffix else ""))
             self._branch_status_label.show()
         else:
-            self._repo_status_label.setText("No repository open")
+            self._repo_status_label.setText(self.tr("No repository open"))
             self._branch_status_label.hide()
 
     def _refresh_profile_status(self) -> None:
@@ -1307,4 +1453,24 @@ class MainWindow(QMainWindow):
                 f"  👤  {active.name}  ({active.git_email})"
             )
         else:
-            self._profile_status_label.setText("  👤  No active profile")
+            self._profile_status_label.setText(self.tr("  👤  No active profile"))
+
+    def _refresh_action_states(self) -> None:
+        if self._clone_in_progress:
+            for action in self._git_actions:
+                action.setEnabled(False)
+            return
+        if not self._repo_ctrl.is_open:
+            for action in self._git_actions:
+                action.setEnabled(False)
+            return
+
+        state = self._repo_ctrl.state
+        self._action_fetch.setEnabled(True)
+        self._action_pull.setEnabled(state.can_pull and not self._toolbar_ctrl.is_busy)
+        self._action_push.setEnabled(state.can_push and not self._toolbar_ctrl.is_busy)
+        self._action_branch.setEnabled(True)
+        self._action_stash.setEnabled(not self._toolbar_ctrl.is_busy)
+        self._action_pop.setEnabled(not self._toolbar_ctrl.is_busy)
+        self._action_undo_nav.setEnabled(self._repo_ctrl.can_undo_navigation())
+        self._action_redo_nav.setEnabled(self._repo_ctrl.can_redo_navigation())
