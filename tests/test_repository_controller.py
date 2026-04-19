@@ -108,7 +108,7 @@ class RepositoryControllerTest(unittest.TestCase):
         self.assertEqual(self.ctrl.incoming_commits(), [])
 
         other = self.root / "other"
-        git_run(self.root, "clone", str(bare), str(other))
+        git_run(self.root, "clone", "--branch", "main", str(bare), str(other))
         git_run(other, "config", "user.name", "Other User")
         git_run(other, "config", "user.email", "other@example.com")
         (other / "remote.txt").write_text("remote\n", encoding="utf-8")
