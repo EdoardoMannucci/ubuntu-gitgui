@@ -321,6 +321,45 @@ class RepositoryController(QObject):
             return []
         return sorted(t.name for t in self._repo.tags)
 
+    def has_pending_changes(self) -> bool:
+        """Return True when the working tree or index contains local changes."""
+        if self._repo is None:
+            return False
+        return self._repo.is_dirty(untracked_files=True)
+
+    def discard_all_changes(self) -> None:
+        """Discard all tracked and untracked local changes in the current repo."""
+        if self._repo is None:
+            raise RuntimeError("No repository open.")
+        self._repo.git.reset("--hard")
+        self._repo.git.clean("-fd")
+
+    def outgoing_commits(self) -> list[CommitData]:
+        """Return commits reachable locally but not yet present on the upstream."""
+        if self._repo is None:
+            return []
+        try:
+            branch = self._repo.active_branch
+        except TypeError:
+            return []
+        upstream = branch.tracking_branch()
+        if upstream is None:
+            return []
+        return self._load_commit_range(f"{upstream.name}..{branch.name}")
+
+    def incoming_commits(self) -> list[CommitData]:
+        """Return commits present on the upstream but not yet merged locally."""
+        if self._repo is None:
+            return []
+        try:
+            branch = self._repo.active_branch
+        except TypeError:
+            return []
+        upstream = branch.tracking_branch()
+        if upstream is None:
+            return []
+        return self._load_commit_range(f"{branch.name}..{upstream.name}")
+
     # ── Commit history ───────────────────────────────────────────────
 
     def load_commits(self, max_count: int = 100, skip: int = 0) -> list[CommitData]:
@@ -358,6 +397,28 @@ class RepositoryController(QObject):
             # Raised on repos with no commits (empty repo after git init)
             pass
 
+        return result
+
+    def _load_commit_range(self, revspec: str, max_count: int = 50) -> list[CommitData]:
+        """Return commit metadata for *revspec* using the same shape as the graph."""
+        if self._repo is None:
+            return []
+
+        result: list[CommitData] = []
+        try:
+            for commit in self._repo.iter_commits(revspec, max_count=max_count):
+                result.append(
+                    CommitData(
+                        full_hash=commit.hexsha,
+                        short_hash=commit.hexsha[:7],
+                        message=commit.message.split("\n")[0].strip(),
+                        author=commit.author.name,
+                        date=commit.committed_datetime.strftime("%Y-%m-%d %H:%M"),
+                        parent_hashes=tuple(p.hexsha for p in commit.parents),
+                    )
+                )
+        except git.GitCommandError:
+            return []
         return result
 
     # ── Merge ─────────────────────────────────────────────────────────

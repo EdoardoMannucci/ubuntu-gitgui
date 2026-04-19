@@ -88,6 +88,51 @@ class RepositoryControllerTest(unittest.TestCase):
         self.ctrl.create_branch_at_ref("release/test", full_hash)
         self.assertEqual(self.ctrl.current_branch_name, "release/test")
 
+    def test_outgoing_and_incoming_commits_are_reported(self) -> None:
+        bare = self.root / "remote.git"
+        git_run(self.root, "init", "--bare", str(bare))
+        git_run(self.repo_path, "remote", "add", "origin", str(bare))
+        git_run(self.repo_path, "push", "-u", "origin", "main")
+
+        self.ctrl.open_repo(str(self.repo_path))
+        self.assertEqual(self.ctrl.outgoing_commits(), [])
+        self.assertEqual(self.ctrl.incoming_commits(), [])
+
+        (self.repo_path / "local.txt").write_text("local\n", encoding="utf-8")
+        git_run(self.repo_path, "add", "local.txt")
+        git_run(self.repo_path, "commit", "-m", "local commit")
+
+        outgoing = self.ctrl.outgoing_commits()
+        self.assertEqual(len(outgoing), 1)
+        self.assertEqual(outgoing[0].message, "local commit")
+        self.assertEqual(self.ctrl.incoming_commits(), [])
+
+        other = self.root / "other"
+        git_run(self.root, "clone", str(bare), str(other))
+        git_run(other, "config", "user.name", "Other User")
+        git_run(other, "config", "user.email", "other@example.com")
+        (other / "remote.txt").write_text("remote\n", encoding="utf-8")
+        git_run(other, "add", "remote.txt")
+        git_run(other, "commit", "-m", "remote commit")
+        git_run(other, "push", "origin", "main")
+
+        git_run(self.repo_path, "fetch", "origin")
+        incoming = self.ctrl.incoming_commits()
+        self.assertEqual(len(incoming), 1)
+        self.assertEqual(incoming[0].message, "remote commit")
+
+    def test_discard_all_changes_resets_working_tree(self) -> None:
+        self.ctrl.open_repo(str(self.repo_path))
+        (self.repo_path / "README.md").write_text("changed\n", encoding="utf-8")
+        (self.repo_path / "scratch.txt").write_text("temp\n", encoding="utf-8")
+
+        self.assertTrue(self.ctrl.has_pending_changes())
+        self.ctrl.discard_all_changes()
+
+        self.assertFalse(self.ctrl.has_pending_changes())
+        self.assertFalse((self.repo_path / "scratch.txt").exists())
+        self.assertEqual((self.repo_path / "README.md").read_text(encoding="utf-8"), "hello\n")
+
     def test_submodules_are_listed(self) -> None:
         sub_remote = self.root / "submodule-remote.git"
         git_run(self.root, "init", "--bare", str(sub_remote))

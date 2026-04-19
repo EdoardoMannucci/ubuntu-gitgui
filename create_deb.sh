@@ -9,7 +9,7 @@
 #   chmod +x create_deb.sh
 #   ./create_deb.sh [VERSION]
 #
-#   VERSION defaults to "1.0.0" when not supplied.
+#   VERSION defaults to "0.3.0-alpha" when not supplied.
 #
 # Output:
 #   ubuntu-gitgui_<VERSION>_amd64.deb
@@ -24,7 +24,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="${1:-1.0.0}"
+VERSION="${1:-0.3.0-alpha}"
 ARCH="amd64"
 PACKAGE="ubuntu-gitgui"
 DEB_NAME="${PACKAGE}_${VERSION}_${ARCH}"

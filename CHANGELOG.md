@@ -10,6 +10,24 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [0.3.0-alpha]
+
+### Added
+- Real-time refresh of the right-hand staging panel while a repository is open
+- Push and Pull toolbar counters showing outgoing and incoming commit counts
+- Push confirmation dialog listing the commits that will be uploaded
+- Pull confirmation dialog listing the commits that will be downloaded
+- Branch-switch safeguard that asks for confirmation before discarding pending changes
+
+---
+
+## [0.2.0-alpha]
+
+### Added
+- Quality-of-life improvements across repository navigation and working-tree refresh flows
+
+---
+
 ## [0.1.0-alpha]
 
 ### Added
@@ -112,5 +130,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-[Unreleased]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.3.0-alpha...HEAD
+[0.3.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.2.0-alpha...v0.3.0-alpha
+[0.2.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.1.0-alpha...v0.2.0-alpha
 [0.1.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/releases/tag/v0.1.0-alpha

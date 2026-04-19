@@ -86,6 +86,12 @@ class StagingController(QObject):
     def has_repo(self) -> bool:
         return self._repo is not None
 
+    def has_pending_changes(self) -> bool:
+        """Return True when the repo has any staged, unstaged, or untracked changes."""
+        if self._repo is None:
+            return False
+        return self._repo.is_dirty(untracked_files=True)
+
     @property
     def is_merging(self) -> bool:
         """True when the repository is in a mid-merge conflict state."""
@@ -171,6 +177,18 @@ class StagingController(QObject):
                     entries.append(FileEntry(status=FileStatus.ADDED, path=path))
 
         return sorted(entries, key=lambda e: e.path)
+
+    def status_signature(self) -> tuple[tuple[str, str, bool], ...]:
+        """Return a stable snapshot of staged/unstaged file state for change detection."""
+        staged_entries = [
+            (entry.status.value, entry.path, True)
+            for entry in self.get_staged()
+        ]
+        unstaged_entries = [
+            (entry.status.value, entry.path, False)
+            for entry in self.get_unstaged()
+        ]
+        return tuple(sorted(staged_entries + unstaged_entries))
 
     # ── Stage operations ──────────────────────────────────────────────
 

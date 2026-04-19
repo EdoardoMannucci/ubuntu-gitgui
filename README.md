@@ -109,10 +109,10 @@ After running `./build.sh`, package the app into a `.deb` with a single command:
 
 ```bash
 chmod +x create_deb.sh
-./create_deb.sh 1.0.0          # pass the version number as an argument
+./create_deb.sh 0.3.0-alpha    # pass the version number as an argument
 
 # Install the generated package
-sudo dpkg -i ubuntu-gitgui_1.0.0_amd64.deb
+sudo dpkg -i ubuntu-gitgui_0.3.0-alpha_amd64.deb
 ```
 
 The `.deb` installer places the bundle at `/opt/ubuntu-gitgui/`, registers the icon in

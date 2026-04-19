@@ -107,6 +107,10 @@ class MainWindow(QMainWindow):
         self._toolbar_ctrl.working_tree_changed.connect(self._on_toolbar_working_tree_changed)
 
         self._clone_in_progress = False
+        self._last_working_tree_signature: tuple[tuple[str, str, bool], ...] = ()
+        self._working_tree_timer = QTimer(self)
+        self._working_tree_timer.setInterval(1500)
+        self._working_tree_timer.timeout.connect(self._poll_working_tree_status)
 
         self._setup_window()
         self._build_menu_bar()
@@ -270,12 +274,12 @@ class MainWindow(QMainWindow):
 
         self._action_pull = QAction(get_icon("pull"), self.tr("Pull"), self)
         self._action_pull.setToolTip(self.tr("Pull current branch (git pull --ff-only)"))
-        self._action_pull.triggered.connect(self._toolbar_ctrl.pull)
+        self._action_pull.triggered.connect(self._action_pull_with_confirmation)
         toolbar.addAction(self._action_pull)
 
         self._action_push = QAction(get_icon("push"), self.tr("Push"), self)
         self._action_push.setToolTip(self.tr("Push current branch to its upstream"))
-        self._action_push.triggered.connect(self._toolbar_ctrl.push)
+        self._action_push.triggered.connect(self._action_push_with_confirmation)
         toolbar.addAction(self._action_push)
 
         toolbar.addSeparator()
@@ -551,10 +555,17 @@ class MainWindow(QMainWindow):
                 pass
         # Always sync profile (including auth credentials) to toolbar controller
         self._toolbar_ctrl.set_profile(active)
+        self._last_working_tree_signature = ()
+        self._working_tree_timer.start()
+        self._refresh_sync_badges()
+        self._sync_working_tree_now()
         self._refresh_action_states()
 
     def _on_repo_closed(self) -> None:
         """Triggered by RepositoryController.repo_closed."""
+        self._working_tree_timer.stop()
+        self._last_working_tree_signature = ()
+        self._refresh_sync_badges()
         self._sidebar.clear_to_empty_state()
         self._graph_widget.clear()
         self._staging_ctrl.set_repo(None)
@@ -606,7 +617,8 @@ class MainWindow(QMainWindow):
             has_more=has_more,
             tags_by_hash=self._repo_ctrl.tags_for_commit(),
         )
-        self._staging_ctrl.status_changed.emit()
+        self._refresh_sync_badges()
+        self._sync_working_tree_now()
 
     def _on_file_selected_for_diff(self, path: str, is_staged: bool) -> None:
         """Forward a file-click from the staging widget to the diff viewer."""
@@ -627,6 +639,8 @@ class MainWindow(QMainWindow):
     def _on_staging_commit_made(self, short_hash: str) -> None:
         """Reload the commit graph after a successful commit from CommitDialog."""
         self._reload_graph()
+        self._refresh_sync_badges()
+        self._sync_working_tree_now()
 
     def _auto_load_startup_repo(self) -> None:
         """Auto-open the most-recently-used repository when the app launches.
@@ -642,6 +656,10 @@ class MainWindow(QMainWindow):
 
     def _on_checkout_requested(self, branch_name: str) -> None:
         """Triggered by SidebarWidget.checkout_requested (user double-clicked)."""
+        if self._repo_ctrl.current_branch_name == branch_name:
+            return
+        if not self._confirm_branch_switch(branch_name):
+            return
         try:
             self._repo_ctrl.checkout_branch(branch_name)
         except git.GitCommandError as exc:
@@ -659,6 +677,8 @@ class MainWindow(QMainWindow):
         """Triggered by SidebarWidget.checkout_remote_requested (double-click / menu)."""
         parts = remote_ref.split("/", 1)
         local_name = parts[1] if len(parts) == 2 else remote_ref
+        if self._repo_ctrl.current_branch_name == local_name:
+            return
 
         reply = QMessageBox.question(
             self,
@@ -668,6 +688,8 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Yes:
+            return
+        if not self._confirm_branch_switch(local_name):
             return
 
         try:
@@ -779,6 +801,8 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
+        if not self._confirm_branch_switch(full_hash[:12]):
+            return
         try:
             self._repo_ctrl.checkout_commit(full_hash)
             self._populate_sidebar()
@@ -805,6 +829,8 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Yes:
+            return
+        if not self._confirm_branch_switch(tag_name):
             return
         try:
             self._repo_ctrl.checkout_tag(tag_name)
@@ -986,6 +1012,8 @@ class MainWindow(QMainWindow):
         try:
             # Checkout the target branch if we are not already on it
             if self._repo_ctrl.current_branch_name != target_branch:
+                if not self._confirm_branch_switch(target_branch):
+                    return
                 self._repo_ctrl.checkout_branch(target_branch)
 
             # Perform the merge
@@ -1051,6 +1079,8 @@ class MainWindow(QMainWindow):
 
     def _action_undo_navigation(self) -> None:
         try:
+            if not self._confirm_branch_switch(self.tr("the previous location")):
+                return
             label = self._repo_ctrl.undo_navigation()
             self._populate_sidebar()
             self._reload_graph()
@@ -1069,6 +1099,8 @@ class MainWindow(QMainWindow):
 
     def _action_redo_navigation(self) -> None:
         try:
+            if not self._confirm_branch_switch(self.tr("the next location")):
+                return
             label = self._repo_ctrl.redo_navigation()
             self._populate_sidebar()
             self._reload_graph()
@@ -1128,6 +1160,7 @@ class MainWindow(QMainWindow):
     def _on_toolbar_finished(self, op_name: str, detail: str) -> None:
         """Re-enable toolbar and show a success message."""
         QApplication.restoreOverrideCursor()
+        self._refresh_sync_badges()
         self._refresh_action_states()
         self._update_repo_status_label()
         QMessageBox.information(self, op_name, detail or f"{op_name} completed.")
@@ -1135,6 +1168,7 @@ class MainWindow(QMainWindow):
     def _on_toolbar_failed(self, op_name: str, error: str) -> None:
         """Re-enable toolbar and show an error message."""
         QApplication.restoreOverrideCursor()
+        self._refresh_sync_badges()
         self._refresh_action_states()
         self._update_repo_status_label()
         QMessageBox.critical(self, f"{op_name} Failed", error)
@@ -1143,11 +1177,13 @@ class MainWindow(QMainWindow):
         """Remote refs changed: reload sidebar and commit graph."""
         self._populate_sidebar()
         self._reload_graph()
+        self._refresh_sync_badges()
 
     def _on_refs_updated(self) -> None:
         """Tags created/deleted: refresh sidebar + graph badges."""
         self._populate_sidebar()
         self._reload_graph()
+        self._refresh_sync_badges()
 
     def _reload_graph(self) -> None:
         """Helper: reload the first page of commits with up-to-date tag badges."""
@@ -1161,7 +1197,98 @@ class MainWindow(QMainWindow):
 
     def _on_toolbar_working_tree_changed(self) -> None:
         """Working tree changed (pull / pop): refresh staging area."""
+        self._sync_working_tree_now()
+        self._refresh_sync_badges()
+
+    def _poll_working_tree_status(self) -> None:
+        """Refresh the right panel when the repo changes on disk outside the app."""
+        if not self._repo_ctrl.is_open or self._toolbar_ctrl.is_busy:
+            return
+        signature = self._staging_ctrl.status_signature()
+        if signature != self._last_working_tree_signature:
+            self._last_working_tree_signature = signature
+            self._staging_ctrl.status_changed.emit()
+
+    def _sync_working_tree_now(self) -> None:
+        """Force a right-panel refresh and store the latest status signature."""
+        self._last_working_tree_signature = self._staging_ctrl.status_signature()
         self._staging_ctrl.status_changed.emit()
+
+    def _refresh_sync_badges(self) -> None:
+        """Update toolbar counters for incoming/outgoing commits."""
+        outgoing = len(self._repo_ctrl.outgoing_commits()) if self._repo_ctrl.is_open else 0
+        incoming = len(self._repo_ctrl.incoming_commits()) if self._repo_ctrl.is_open else 0
+
+        push_text = self.tr("Push")
+        pull_text = self.tr("Pull")
+        if outgoing > 0:
+            push_text = self.tr("Push ({0})").format(outgoing)
+        if incoming > 0:
+            pull_text = self.tr("Pull ({0})").format(incoming)
+
+        self._action_push.setText(push_text)
+        self._action_pull.setText(pull_text)
+        self._action_push.setToolTip(
+            self.tr("Push current branch to its upstream")
+            + (self.tr(" — {0} local commit(s) waiting").format(outgoing) if outgoing else "")
+        )
+        self._action_pull.setToolTip(
+            self.tr("Pull current branch (git pull --ff-only)")
+            + (self.tr(" — {0} remote commit(s) available").format(incoming) if incoming else "")
+        )
+
+    def _format_commit_preview(self, commits: list) -> str:
+        """Render a short commit list for confirmation dialogs."""
+        preview = [f"• {commit.short_hash}  {commit.message}" for commit in commits[:12]]
+        if len(commits) > 12:
+            preview.append(self.tr("• …and {0} more").format(len(commits) - 12))
+        return "\n".join(preview)
+
+    def _action_push_with_confirmation(self) -> None:
+        commits = self._repo_ctrl.outgoing_commits()
+        if not commits:
+            QMessageBox.information(
+                self,
+                self.tr("Push"),
+                self.tr("There are no local commits waiting to be pushed."),
+            )
+            self._refresh_sync_badges()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            self.tr("Confirm Push"),
+            self.tr("Push {0} commit(s) to the upstream branch?\n\n{1}").format(
+                len(commits),
+                self._format_commit_preview(commits),
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._toolbar_ctrl.push()
+
+    def _action_pull_with_confirmation(self) -> None:
+        commits = self._repo_ctrl.incoming_commits()
+        if not commits:
+            QMessageBox.information(
+                self,
+                self.tr("Pull"),
+                self.tr("There are no remote commits to pull right now."),
+            )
+            self._refresh_sync_badges()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            self.tr("Confirm Pull"),
+            self.tr("Pull {0} commit(s) from the upstream branch?\n\n{1}").format(
+                len(commits),
+                self._format_commit_preview(commits),
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._toolbar_ctrl.pull()
 
     # ── Recent repositories (Phase 12) ───────────────────────────────
 
@@ -1408,6 +1535,45 @@ class MainWindow(QMainWindow):
 
     # ── UI helpers ────────────────────────────────────────────────────
 
+    def _confirm_branch_switch(self, destination: str) -> bool:
+        """Ask permission to discard local changes before a checkout-like action."""
+        if not self._repo_ctrl.is_open or not self._repo_ctrl.has_pending_changes():
+            return True
+
+        unstaged = [entry.path for entry in self._staging_ctrl.get_unstaged()]
+        staged = [entry.path for entry in self._staging_ctrl.get_staged()]
+        pending_paths = sorted(set(unstaged + staged))
+        preview = "\n".join(f"• {path}" for path in pending_paths[:10])
+        if len(pending_paths) > 10:
+            preview += "\n" + self.tr("• …and {0} more").format(len(pending_paths) - 10)
+
+        reply = QMessageBox.warning(
+            self,
+            self.tr("Discard Local Changes?"),
+            self.tr(
+                "Switching to <b>{0}</b> requires discarding the local changes currently pending."
+                "<br><br>These changes will be removed by the application before the branch switch."
+                "<br><br>{1}<br><br>Continue?"
+            ).format(destination, preview.replace("\n", "<br>")),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        try:
+            self._repo_ctrl.discard_all_changes()
+            self._sync_working_tree_now()
+            return True
+        except git.GitCommandError as exc:
+            QMessageBox.critical(
+                self,
+                self.tr("Discard Failed"),
+                f"<pre>{exc.stderr.strip() if exc.stderr else str(exc)}</pre>",
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, self.tr("Discard Failed"), str(exc))
+        return False
+
     def _populate_sidebar(self) -> None:
         """Ask the sidebar to rebuild itself from the current repo state."""
         ctrl = self._repo_ctrl
@@ -1439,6 +1605,15 @@ class MainWindow(QMainWindow):
                 suffix = self.tr("no upstream")
             elif state.upstream_name:
                 suffix = state.upstream_name
+                incoming = len(self._repo_ctrl.incoming_commits())
+                outgoing = len(self._repo_ctrl.outgoing_commits())
+                sync_parts: list[str] = []
+                if outgoing:
+                    sync_parts.append(self.tr("↑{0}").format(outgoing))
+                if incoming:
+                    sync_parts.append(self.tr("↓{0}").format(incoming))
+                if sync_parts:
+                    suffix = f"{suffix}  ·  {' '.join(sync_parts)}"
             label = state.display_name or self._repo_ctrl.current_branch_name
             self._branch_status_label.setText(f"   ⎇  {label}" + (f"  ·  {suffix}" if suffix else ""))
             self._branch_status_label.show()
