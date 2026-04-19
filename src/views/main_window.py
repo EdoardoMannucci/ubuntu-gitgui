@@ -51,7 +51,8 @@ from src.controllers.toolbar_controller import ToolbarController
 from src.models.profile import Profile
 from src.models.recent_repos import RecentRepositoryManager
 from src.utils.icons import icon as get_icon
-from src.views.about_dialog import AboutDialog
+from src.utils.update_checker import UpdateChecker
+from src.views.about_dialog import AboutDialog, _VERSION
 from src.views.commit_dialog import CommitDialog
 from src.views.clone_dialog import CloneDialog
 from src.views.commit_graph_widget import CommitGraphWidget
@@ -121,6 +122,9 @@ class MainWindow(QMainWindow):
         # Auto-open the most-recently-used repository on startup.
         # Deferred via QTimer so the window is fully shown before loading.
         QTimer.singleShot(0, self._auto_load_startup_repo)
+
+        # Check for updates in the background after the window is ready.
+        QTimer.singleShot(2000, self._start_update_check)
 
     # ── Window chrome ─────────────────────────────────────────────────
 
@@ -209,6 +213,10 @@ class MainWindow(QMainWindow):
         about_action = QAction(get_icon("about"), self.tr("About ubuntu-gitgui…"), self)
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
+
+        check_update_action = QAction(get_icon("refresh"), self.tr("Check for Updates…"), self)
+        check_update_action.triggered.connect(self._check_for_updates_manual)
+        help_menu.addAction(check_update_action)
 
         help_menu.addSeparator()
 
@@ -758,6 +766,62 @@ class MainWindow(QMainWindow):
 
     def _show_about_dialog(self) -> None:
         AboutDialog(parent=self).exec()
+
+    # ── Update checker ────────────────────────────────────────────────
+
+    def _start_update_check(self) -> None:
+        self._update_checker = UpdateChecker(_VERSION, parent=self)
+        self._update_checker.update_available.connect(self._on_update_available)
+        self._update_checker.start()
+
+    def _check_for_updates_manual(self) -> None:
+        """Manual 'Check for Updates' — runs inline and always shows a result."""
+        checker = UpdateChecker(_VERSION, parent=self)
+        checker.update_available.connect(
+            lambda ver, url: self._show_update_dialog(ver, url)
+        )
+        checker.finished.connect(
+            lambda: self._maybe_show_up_to_date(checker)
+        )
+        checker._manual = True
+        checker._update_found = False
+        checker.update_available.connect(lambda *_: setattr(checker, "_update_found", True))
+        checker.start()
+        self._manual_checker = checker
+
+    def _maybe_show_up_to_date(self, checker: UpdateChecker) -> None:
+        if not getattr(checker, "_update_found", False):
+            QMessageBox.information(
+                self,
+                self.tr("No Updates Found"),
+                self.tr(
+                    f"You are running the latest version ({_VERSION})."
+                ),
+            )
+
+    def _on_update_available(self, latest: str, url: str) -> None:
+        self._show_update_dialog(latest, url)
+
+    def _show_update_dialog(self, latest: str, url: str) -> None:
+        msg = QMessageBox(self)
+        msg.setWindowTitle(self.tr("Update Available"))
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(
+            self.tr(
+                f"<b>Version {latest}</b> is available.<br><br>"
+                f"You are currently running <b>{_VERSION}</b>.<br>"
+                f"Download the new <code>.deb</code> from GitHub Releases "
+                f"and install it with:<br><br>"
+                f"<code>sudo dpkg -i ubuntu-gitgui_{latest}_amd64.deb</code>"
+            )
+        )
+        open_btn = msg.addButton(
+            self.tr("Open Releases Page"), QMessageBox.ButtonRole.AcceptRole
+        )
+        msg.addButton(self.tr("Later"), QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is open_btn:
+            QDesktopServices.openUrl(QUrl(url))
 
     # ── Sidebar context-menu handlers ─────────────────────────────────
 

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from src.utils.update_checker import UpdateChecker; from src.views.about_dialog import _VERSION; print\\('OK, version:', _VERSION\\)\")",
+      "Bash(venv/bin/python -c \"from src.utils.update_checker import UpdateChecker; from src.views.about_dialog import _VERSION; print\\('OK, version:', _VERSION\\)\")",
+      "Bash(venv/bin/python -c \"import ast, sys; ast.parse\\(open\\('src/views/main_window.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")"
+    ]
+  }
+}

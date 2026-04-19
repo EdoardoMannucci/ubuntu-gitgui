@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from src.utils.icons import icon as get_icon
 
 _APP_NAME    = "ubuntu-gitgui"
-_VERSION     = "0.3.0-alpha"
+_VERSION     = "0.4.0-alpha"
 _DESCRIPTION = "A modern, open-source Git GUI for Linux."
 _LICENSE     = "MIT License"
 _REPO_URL    = "https://github.com/edoardottt/ubuntu-gitgui"
