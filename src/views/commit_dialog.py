@@ -18,6 +18,8 @@ Layout:
 
 When the commit succeeds the dialog closes (``accept()``) and emits
 ``commit_made(short_hash)`` so the caller can refresh the commit graph.
+If the user chooses "Commit + Push", the dialog also emits
+``commit_and_push_requested()`` before closing.
 """
 
 from __future__ import annotations
@@ -85,6 +87,7 @@ class CommitDialog(QDialog):
     """
 
     commit_made = pyqtSignal(str)   # 7-char short hash of the new commit
+    commit_and_push_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -263,7 +266,7 @@ class CommitDialog(QDialog):
         self._body_edit.setFixedHeight(72)
         layout.addWidget(self._body_edit)
 
-        # Author label + Commit button
+        # Author label + Commit actions
         action_row = QHBoxLayout()
 
         self._author_label = QLabel()
@@ -271,14 +274,22 @@ class CommitDialog(QDialog):
         action_row.addWidget(self._author_label)
         action_row.addStretch()
 
-        self._commit_btn = QPushButton("  Commit Changes")
+        self._commit_btn = QPushButton("Commit")
         self._commit_btn.setIcon(get_icon("commit"))
-        self._commit_btn.setObjectName("accent_btn")
         self._commit_btn.setEnabled(False)
-        self._commit_btn.setMinimumWidth(160)
+        self._commit_btn.setMinimumWidth(124)
         self._commit_btn.setMinimumHeight(34)
         self._commit_btn.clicked.connect(self._on_commit)
         action_row.addWidget(self._commit_btn)
+
+        self._commit_and_push_btn = QPushButton("  Commit + Push")
+        self._commit_and_push_btn.setIcon(get_icon("push"))
+        self._commit_and_push_btn.setObjectName("accent_btn")
+        self._commit_and_push_btn.setEnabled(False)
+        self._commit_and_push_btn.setMinimumWidth(170)
+        self._commit_and_push_btn.setMinimumHeight(34)
+        self._commit_and_push_btn.clicked.connect(self._on_commit_and_push)
+        action_row.addWidget(self._commit_and_push_btn)
 
         layout.addLayout(action_row)
         return container
@@ -326,9 +337,9 @@ class CommitDialog(QDialog):
     def _refresh_commit_button(self) -> None:
         has_staged  = self._staged_list.count() > 0
         has_summary = bool(self._summary_edit.text().strip())
-        self._commit_btn.setEnabled(
-            self._staging.has_repo and has_staged and has_summary
-        )
+        enabled = self._staging.has_repo and has_staged and has_summary
+        self._commit_btn.setEnabled(enabled)
+        self._commit_and_push_btn.setEnabled(enabled)
 
     def _refresh_author_label(self) -> None:
         profile = self._profile.active_profile
@@ -394,6 +405,12 @@ class CommitDialog(QDialog):
     # ── Commit ────────────────────────────────────────────────────────
 
     def _on_commit(self) -> None:
+        self._submit_commit(push_after=False)
+
+    def _on_commit_and_push(self) -> None:
+        self._submit_commit(push_after=True)
+
+    def _submit_commit(self, *, push_after: bool) -> None:
         """Gather identity, build message, and execute the commit."""
         summary = self._summary_edit.text().strip()
         if not summary:
@@ -420,6 +437,8 @@ class CommitDialog(QDialog):
         try:
             short_hash = self._staging.commit(message, git_name, git_email)
             self.commit_made.emit(short_hash)
+            if push_after:
+                self.commit_and_push_requested.emit()
             self.accept()
         except ValueError as exc:
             QMessageBox.warning(self, "Commit Cancelled", str(exc))

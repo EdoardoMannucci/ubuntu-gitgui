@@ -86,29 +86,73 @@ QToolBar {
     background-color: #0d0d1c;
     border: none;
     border-bottom: none;
-    spacing: 2px;
+    spacing: 4px;
     padding: 4px 8px;
 }
 QToolBar QToolButton {
-    background-color: transparent;
-    color: #aba9be;
-    border: none;
-    border-radius: 8px;
-    padding: 5px 12px 4px 12px;
+    background-color: #18182a;
+    color: #e6e3fa;
+    border: 1px solid #2f3850;
+    border-radius: 10px;
+    padding: 6px 12px 5px 12px;
     min-width: 52px;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
 }
 QToolBar QToolButton:hover {
     background-color: #1d1e32;
-    color: #e6e3fa;
+    color: #9cefff;
+    border-color: #58acbb;
 }
 QToolBar QToolButton:pressed {
-    background-color: #18182a;
+    background-color: #131728;
     color: #9cefff;
+    border-color: #9cefff;
 }
 QToolBar QToolButton:disabled {
     color: #474658;
+    background-color: #121223;
+    border-color: #25253a;
+}
+QToolBar QToolButton#toolbar_primary_btn {
+    background-color: #4fcfd2;
+    color: #0d0d1c;
+    border: 1px solid #7fe4ea;
+}
+QToolBar QToolButton#toolbar_primary_btn:hover {
+    background-color: #71dfe1;
+    color: #0d0d1c;
+    border-color: #9cefff;
+}
+QToolBar QToolButton#toolbar_primary_btn:pressed {
+    background-color: #39b9bc;
+    color: #0d0d1c;
+    border-color: #9cefff;
+}
+QToolBar QToolButton#toolbar_primary_btn:disabled {
+    background-color: #243440;
+    color: #7aa9b3;
+    border-color: #2d4854;
+}
+QToolBar QToolButton#toolbar_secondary_btn {
+    background-color: #c29af3;
+    color: #0d0d1c;
+    border: 1px solid #dcc1fb;
+}
+QToolBar QToolButton#toolbar_secondary_btn:hover {
+    background-color: #d0adf7;
+    color: #0d0d1c;
+    border-color: #e7d3fd;
+}
+QToolBar QToolButton#toolbar_secondary_btn:pressed {
+    background-color: #b286ee;
+    color: #0d0d1c;
+    border-color: #dcc1fb;
+}
+QToolBar QToolButton#toolbar_secondary_btn:disabled {
+    background-color: #332a45;
+    color: #8f7aa9;
+    border-color: #433356;
 }
 QToolBar::separator {
     background-color: #1d1e32;

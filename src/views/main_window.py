@@ -277,6 +277,11 @@ class MainWindow(QMainWindow):
         self._action_pull.triggered.connect(self._action_pull_with_confirmation)
         toolbar.addAction(self._action_pull)
 
+        self._action_commit = QAction(get_icon("commit"), self.tr("Commit"), self)
+        self._action_commit.setToolTip(self.tr("Open the commit workspace"))
+        self._action_commit.triggered.connect(self._open_commit_dialog)
+        toolbar.addAction(self._action_commit)
+
         self._action_push = QAction(get_icon("push"), self.tr("Push"), self)
         self._action_push.setToolTip(self.tr("Push current branch to its upstream"))
         self._action_push.triggered.connect(self._action_push_with_confirmation)
@@ -321,11 +326,14 @@ class MainWindow(QMainWindow):
         toolbar.addAction(identity_action)
 
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        self._set_toolbar_action_style(toolbar, self._action_commit, "toolbar_primary_btn")
+        self._set_toolbar_action_style(toolbar, self._action_push, "toolbar_secondary_btn")
 
         # All git actions start disabled until a repo is open
         self._git_actions: list[QAction] = [
             self._action_fetch,
             self._action_pull,
+            self._action_commit,
             self._action_push,
             self._action_undo_nav,
             self._action_redo_nav,
@@ -334,6 +342,15 @@ class MainWindow(QMainWindow):
             self._action_pop,
         ]
         self._set_toolbar_enabled(False)
+
+    @staticmethod
+    def _set_toolbar_action_style(toolbar: QToolBar, action: QAction, object_name: str) -> None:
+        """Assign a stable object name to a toolbar action's backing button."""
+        button = toolbar.widgetForAction(action)
+        if button is not None:
+            button.setObjectName(object_name)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     # ── Central widget ────────────────────────────────────────────────
 
@@ -632,9 +649,14 @@ class MainWindow(QMainWindow):
             repo_name=self._repo_ctrl.repo_name,
             parent=self,
         )
+        dialog.commit_and_push_requested.connect(self._commit_and_push_from_dialog)
         dialog.exec()
         # Graph reload is triggered automatically via _on_staging_commit_made
         # which is connected to staging_ctrl.commit_made.
+
+    def _commit_and_push_from_dialog(self) -> None:
+        """Start a push immediately after a successful commit dialog submission."""
+        self._toolbar_ctrl.push()
 
     def _on_staging_commit_made(self, short_hash: str) -> None:
         """Reload the commit graph after a successful commit from CommitDialog."""
@@ -1643,6 +1665,7 @@ class MainWindow(QMainWindow):
         state = self._repo_ctrl.state
         self._action_fetch.setEnabled(True)
         self._action_pull.setEnabled(state.can_pull and not self._toolbar_ctrl.is_busy)
+        self._action_commit.setEnabled(not self._toolbar_ctrl.is_busy)
         self._action_push.setEnabled(state.can_push and not self._toolbar_ctrl.is_busy)
         self._action_branch.setEnabled(True)
         self._action_stash.setEnabled(not self._toolbar_ctrl.is_busy)

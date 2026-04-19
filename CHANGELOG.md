@@ -10,6 +10,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [0.4.0-alpha]
+
+### Added
+- Toolbar `Commit` action for opening the commit workspace directly
+- `Commit + Push` action inside the commit dialog to create and publish a commit in one flow
+- Stronger toolbar button contrast in both dark and light themes, with logo-inspired cyan and violet accents
+
+---
+
 ## [0.3.0-alpha]
 
 ### Added
@@ -130,7 +139,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-[Unreleased]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.3.0-alpha...HEAD
+[Unreleased]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.4.0-alpha...HEAD
+[0.4.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.3.0-alpha...v0.4.0-alpha
 [0.3.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.2.0-alpha...v0.3.0-alpha
 [0.2.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/compare/v0.1.0-alpha...v0.2.0-alpha
 [0.1.0-alpha]: https://github.com/EdoardoMannucci/ubuntu-gitgui/releases/tag/v0.1.0-alpha
